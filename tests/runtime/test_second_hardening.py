@@ -187,3 +187,58 @@ def test_legacy_pipeline_honors_cancellation_before_native_vision_work() -> None
 
     with pytest.raises(Exception, match="cancelled"):
         pipeline.analyze(np.zeros((2, 2, 3), dtype=np.uint8), cancellation=token)
+
+
+@pytest.mark.parametrize("failure", [KeyboardInterrupt(), SystemExit(9)])
+def test_control_baseexception_during_stopping_never_skips_capture_stop(failure) -> None:
+    class StoppingSink(EventBus):
+        def publish(self, event):
+            if event.kind is EventKind.LIFECYCLE and event.payload["status"] == "stopping":
+                raise failure
+            super().publish(event)
+
+    source = Source()
+    bot = runtime(source, clock=lambda: 1.0, events=StoppingSink())
+    with pytest.raises(type(failure)):
+        bot.run(max_frames=1)
+    assert source.stopped
+
+
+def test_freeze_rejects_scalar_subclasses_and_normalizes_real_timestamp() -> None:
+    class MutableString(str):
+        pass
+
+    class CustomReal(float):
+        pass
+
+    with pytest.raises(TypeError):
+        RuntimeEvent(EventKind.FRAME, 1.0, {MutableString("key"): "value"})
+    with pytest.raises(TypeError):
+        RuntimeEvent(EventKind.FRAME, 1.0, {"value": CustomReal(1.0)})
+    event = RuntimeEvent(EventKind.FRAME, CustomReal(1.0), {"value": 1})
+    assert type(event.emitted_at_monotonic) is float
+
+
+def test_event_bus_reset_clears_session_state() -> None:
+    bus = EventBus(capacity=1)
+    bus.publish(RuntimeEvent(EventKind.LIFECYCLE, 1.0, {"status": "running"}))
+    bus.publish(RuntimeEvent(EventKind.ERROR, 2.0, {"phase": "run", "error": "x"}))
+    bus.reset()
+    assert bus.drain() == []
+    assert bus.dropped_count == 0
+    assert bus.latest_lifecycle is None
+    assert bus.latest_error is None
+
+
+def test_runtime_supports_positional_only_legacy_perception() -> None:
+    seen = []
+
+    class Legacy:
+        def analyze(self, image, cancellation=None, /):
+            seen.append(cancellation)
+            return {"screen": "UNKNOWN"}
+
+    bot = runtime(Source(), clock=lambda: 1.0)
+    bot._perception = Legacy()
+    assert bot.run(max_frames=1) == 1
+    assert seen == [None]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import sys
 from pathlib import Path
 
 from loguru import logger
@@ -58,7 +59,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    setup_logger("INFO")
+    try:
+        setup_logger("INFO")
+    except KeyboardInterrupt:
+        return 130
+    except Exception as exc:
+        print(f"runtime setup failed: {exc}", file=sys.stderr)
+        return 1
     cancellation = CancellationToken()
     events = LoggingEventSink(logger)
 

@@ -55,6 +55,7 @@ class BotRuntime:
         self._clock = clock
         self._used = False
         self._used_lock = Lock()
+        self._analyze_accepts_cancellation = self._detect_cancellation_support(perception.analyze)
 
     def _event(self, kind: EventKind, payload: dict[str, Any]) -> RuntimeEvent:
         return RuntimeEvent(kind=kind, emitted_at_monotonic=self._clock(), payload=payload)
@@ -88,19 +89,22 @@ class BotRuntime:
         if event is not None:
             self._publish(event, note_error=exc)
 
-    def _analyze(self, image: Any) -> Mapping[str, Any]:
-        analyze = self._perception.analyze
+    @staticmethod
+    def _detect_cancellation_support(analyze: Callable[..., Any]) -> bool:
         try:
             parameters = signature(analyze).parameters.values()
         except (TypeError, ValueError):
-            return analyze(image)
-        accepts_cancellation = any(
-            parameter.name == "cancellation" or parameter.kind is Parameter.VAR_KEYWORD
+            return False
+        return any(
+            (parameter.name == "cancellation" and parameter.kind in {Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY})
+            or parameter.kind is Parameter.VAR_KEYWORD
             for parameter in parameters
         )
-        if accepts_cancellation:
-            return analyze(image, cancellation=self._cancellation)
-        return analyze(image)
+
+    def _analyze(self, image: Any) -> Mapping[str, Any]:
+        if self._analyze_accepts_cancellation:
+            return self._perception.analyze(image, cancellation=self._cancellation)
+        return self._perception.analyze(image)
 
     def _mark_failed(self, primary_error: BaseException) -> None:
         if self._lifecycle.status is RuntimeStatus.FAILED:
@@ -181,35 +185,42 @@ class BotRuntime:
             self._mark_failed(primary_error)
         finally:
             if cleanup_required:
-                if primary_error is None and self._lifecycle.status in {
-                    RuntimeStatus.STARTING,
-                    RuntimeStatus.RUNNING,
-                    RuntimeStatus.PAUSED,
-                }:
-                    try:
-                        self._transition(RuntimeStatus.STOPPING)
-                    except Exception as transition_error:
-                        primary_error = transition_error
-                        self._publish_error(primary_error, phase="cleanup")
-                        self._mark_failed(primary_error)
                 try:
-                    self._capture.stop()
-                except Exception as stop_error:
-                    if primary_error is not None:
-                        primary_error.add_note(f"cleanup also failed: {stop_error!r}")
-                        self._publish_error(stop_error, phase="cleanup")
+                    if primary_error is None and self._lifecycle.status in {
+                        RuntimeStatus.STARTING,
+                        RuntimeStatus.RUNNING,
+                        RuntimeStatus.PAUSED,
+                    }:
+                        self._transition(RuntimeStatus.STOPPING)
+                except BaseException as cleanup_error:
+                    if primary_error is None:
+                        primary_error = cleanup_error
                     else:
-                        primary_error = stop_error
-                        self._publish_error(primary_error, phase="cleanup")
+                        primary_error.add_note(f"cleanup transition also failed: {cleanup_error!r}")
+                finally:
+                    try:
+                        self._capture.stop()
+                    except BaseException as stop_error:
+                        if primary_error is not None:
+                            primary_error.add_note(f"cleanup also failed: {stop_error!r}")
+                        else:
+                            primary_error = stop_error
+                            try:
+                                self._publish_error(primary_error, phase="cleanup")
+                            except BaseException as telemetry_error:
+                                primary_error.add_note(f"cleanup telemetry also failed: {telemetry_error!r}")
+
+                if primary_error is not None and self._lifecycle.status is not RuntimeStatus.FAILED:
+                    try:
                         self._mark_failed(primary_error)
+                    except BaseException as failed_transition_error:
+                        primary_error.add_note(f"failed-state transition also failed: {failed_transition_error!r}")
 
                 if primary_error is None and self._lifecycle.status is RuntimeStatus.STOPPING:
                     try:
                         self._transition(RuntimeStatus.STOPPED)
-                    except Exception as transition_error:
+                    except BaseException as transition_error:
                         primary_error = transition_error
-                        self._publish_error(primary_error, phase="cleanup")
-                        self._mark_failed(primary_error)
 
         if primary_error is not None:
             raise primary_error

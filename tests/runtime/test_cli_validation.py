@@ -58,3 +58,9 @@ def test_main_catches_keyboard_interrupt_before_runtime_run(monkeypatch) -> None
 
     monkeypatch.setattr("src.main.DeviceSession", interrupted_session)
     assert main(["--device", "offline"]) == 130
+
+
+@pytest.mark.parametrize("failure, code", [(KeyboardInterrupt(), 130), (RuntimeError("log failure"), 1)])
+def test_main_bounds_setup_logger_failures(monkeypatch, failure, code) -> None:
+    monkeypatch.setattr("src.main.setup_logger", lambda level: (_ for _ in ()).throw(failure))
+    assert main(["--device", "offline"]) == code

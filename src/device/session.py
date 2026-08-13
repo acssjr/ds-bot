@@ -22,6 +22,11 @@ class DeviceNotConnected(DeviceSessionError):
 
 
 class DeviceSession:
+    """Explicit ADB session.
+
+    ``timeout_seconds`` configures socket inactivity timeouts, not an absolute
+    wall-clock deadline for a native ADB operation.
+    """
     def __init__(self, serial: str, *, adb_client: Any = None, timeout_seconds: float = 10.0):
         if not isinstance(serial, str):
             raise TypeError("serial must be a string")

@@ -24,16 +24,16 @@ class EventSink(Protocol):
 
 
 def _freeze(value: Any) -> Any:
-    if value is None or isinstance(value, (str, bool, int)):
+    if value is None or type(value) in {str, bool, int}:
         return value
-    if isinstance(value, float):
+    if type(value) is float:
         if not math.isfinite(value):
             raise ValueError("payload floats must be finite")
         return value
     if isinstance(value, Mapping):
         frozen: dict[str, Any] = {}
         for key, item in value.items():
-            if not isinstance(key, str):
+            if type(key) is not str:
                 raise TypeError("payload mapping keys must be strings")
             frozen[key] = _freeze(item)
         return MappingProxyType(frozen)
@@ -55,12 +55,14 @@ class RuntimeEvent:
             raise TypeError("kind must be an EventKind")
         if isinstance(self.emitted_at_monotonic, bool) or not isinstance(self.emitted_at_monotonic, Real):
             raise TypeError("timestamp must be a real number")
-        if not math.isfinite(self.emitted_at_monotonic):
+        timestamp = float(self.emitted_at_monotonic)
+        if not math.isfinite(timestamp):
             raise ValueError("timestamp must be finite")
-        if self.emitted_at_monotonic < 0:
+        if timestamp < 0:
             raise ValueError("timestamp must be non-negative")
         if not isinstance(self.payload, Mapping):
             raise TypeError("payload must be a Mapping")
+        object.__setattr__(self, "emitted_at_monotonic", timestamp)
         object.__setattr__(self, "payload", _freeze(self.payload))
 
 
@@ -132,6 +134,14 @@ class EventBus:
         with self._lock:
             count = min(limit, len(self._queue))
             return [self._queue.popleft() for _ in range(count)]
+
+    def reset(self) -> None:
+        """Clear all per-session retained events and authoritative snapshots."""
+        with self._lock:
+            self._queue.clear()
+            self._dropped_count = 0
+            self._latest_lifecycle = None
+            self._latest_error = None
 
 
 class LoggingEventSink:
