@@ -1,0 +1,24 @@
+# Python environments and caches
+.venv/
+.venv312/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# Local runtime output
+.artifacts/
+artifacts/
+logs/
+*.log
+
+# Local worktrees
+.worktrees/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

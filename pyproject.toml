@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "draft-showdown-bot"
+version = "0.1.0"
+description = "Bot de automação autônomo baseado em Visão Computacional para Draft Showdown"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "opencv-python",
+    "numpy",
+    "pillow",
+    "pydantic>=2.0",
+    "adbutils",
+    "loguru",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
