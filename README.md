@@ -18,7 +18,7 @@ Os módulos legados de planejamento e entrada ainda existem no código como refe
 - Windows com MEmu e ADB habilitado, somente para observação ao vivo;
 - Python 3.12 (a faixa suportada é `>=3.12,<3.13`);
 - [uv](https://docs.astral.sh/uv/) para criar o ambiente reproduzível;
-- execução a partir do clone do repositório, com instalação editável, pois os templates estão em `assets/templates` na árvore-fonte.
+- clone do repositório recomendado para desenvolvimento e para usar o corpus manual de replay incluído em `screenshots/`.
 
 ## Preparação
 
@@ -30,7 +30,7 @@ $env:UV_PROJECT_ENVIRONMENT = ".venv312"
 uv sync --locked --extra dev
 ```
 
-`uv sync --locked` consome o `uv.lock` sem atualizá-lo e instala o projeto de forma editável em `.venv312`, preservando uma eventual `.venv` antiga. Esta fundação não promete que um wheel publicado contenha os assets; os comandos documentados pressupõem o clone e a instalação editável acima.
+`uv sync --locked` consome o `uv.lock` sem atualizá-lo e instala o projeto de forma editável em `.venv312`, preservando uma eventual `.venv` antiga. Esse continua sendo o fluxo recomendado de desenvolvimento. O wheel do projeto contém os templates legados necessários para a percepção padrão, mas não inclui as capturas manuais de `screenshots/`.
 
 ## Testes
 
@@ -47,7 +47,7 @@ uv sync --locked --extra dev
 
 Em replay, `--frames` deve ser um inteiro positivo e não pode superar a quantidade de PNG/JPG disponível. Se omitido, todas as imagens do diretório são processadas. `--interval` é o intervalo não negativo, em segundos, entre frames; o padrão é `0.25`.
 
-As capturas feitas manualmente em `screenshots/` são referências das telas e de suas variações, úteis para pesquisa, replay e construção de testes. Elas não são tratadas como templates perfeitos. Na observação ao vivo, a produção captura cada frame automaticamente do dispositivo por ADB.
+As capturas feitas manualmente em `screenshots/` são referências das telas e de suas variações, úteis para pesquisa, replay e construção de testes. Elas não são tratadas como templates perfeitos nem distribuídas no wheel. O comando acima pressupõe o clone; numa instalação por wheel, informe em `--replay` um diretório de imagens fornecido pelo usuário, preferencialmente com caminho absoluto. Na observação ao vivo, a produção captura cada frame automaticamente do dispositivo por ADB.
 
 ## CLI: observação ao vivo no MEmu
 

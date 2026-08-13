@@ -1,0 +1,145 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import zipfile
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _run(command: list[str], *, cwd: Path, timeout: int = 180) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    environment.pop("PYTHONHOME", None)
+    environment["PYTHONNOUSERSITE"] = "1"
+    completed = subprocess.run(
+        command,
+        cwd=cwd,
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    return completed
+
+
+def _venv_python(venv: Path) -> Path:
+    return venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+
+def _venv_entrypoint(venv: Path) -> Path:
+    return venv / (
+        "Scripts/draft-showdown-bot.exe"
+        if os.name == "nt"
+        else "bin/draft-showdown-bot"
+    )
+
+
+def test_wheel_contains_resources_and_runs_external_replay(tmp_path: Path) -> None:
+    uv = shutil.which("uv")
+    assert uv is not None, "uv is required to verify the distribution"
+    source_tree = tmp_path / "source"
+    shutil.copytree(
+        PROJECT_ROOT,
+        source_tree,
+        ignore=shutil.ignore_patterns(
+            ".git",
+            ".worktrees",
+            ".venv",
+            ".venv312",
+            ".pytest_cache",
+            ".hypothesis",
+            "__pycache__",
+            "*.pyc",
+            "*.egg-info",
+            "build",
+            "dist",
+            ".artifacts",
+            "artifacts",
+            "logs",
+            "*.log",
+        ),
+    )
+    wheel_dir = tmp_path / "wheel"
+    wheel_dir.mkdir()
+
+    _run(
+        [
+            uv,
+            "build",
+            "--wheel",
+            "--out-dir",
+            str(wheel_dir),
+            "--no-create-gitignore",
+            str(source_tree),
+        ],
+        cwd=tmp_path,
+    )
+    wheels = list(wheel_dir.glob("*.whl"))
+    assert len(wheels) == 1
+    wheel = wheels[0]
+
+    expected_templates = {
+        path.relative_to(source_tree).as_posix()
+        for path in (source_tree / "assets/templates").rglob("*")
+        if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg"}
+    }
+    assert expected_templates
+    with zipfile.ZipFile(wheel) as archive:
+        member_list = archive.namelist()
+    members = set(member_list)
+    assert len(member_list) == len(members)
+    assert "assets/__init__.py" in members
+    assert expected_templates <= members
+    assert not any(member.startswith("screenshots/") for member in members)
+
+    venv = tmp_path / "clean-venv"
+    _run([uv, "venv", "--python", "3.12", str(venv)], cwd=tmp_path)
+    python = _venv_python(venv)
+    _run([uv, "pip", "install", "--python", str(python), str(wheel)], cwd=tmp_path)
+
+    external_cwd = tmp_path / "outside"
+    external_cwd.mkdir()
+    initialized = _run(
+        [
+            str(python),
+            "-I",
+            "-c",
+            (
+                "import src; "
+                "from src.vision.legacy_adapter import LegacyVisionAdapter; "
+                "LegacyVisionAdapter(); print('wheel adapter OK')"
+            ),
+        ],
+        cwd=external_cwd,
+    )
+    assert initialized.stdout.strip() == "wheel adapter OK"
+
+    replayed = _run(
+        [
+            str(_venv_entrypoint(venv)),
+            "--replay",
+            str((source_tree / "screenshots").resolve()),
+            "--frames",
+            "1",
+            "--interval",
+            "0",
+        ],
+        cwd=external_cwd,
+    )
+    output = ANSI_ESCAPE.sub("", replayed.stdout + replayed.stderr)
+    lines = output.splitlines()
+    assert sum(" - frame | " in line for line in lines) == 1
+    assert sum(" - observation | " in line for line in lines) == 1
+    assert sum(" - input | " in line for line in lines) == 0
+    assert not (PROJECT_ROOT / "build").exists()
+    assert not (PROJECT_ROOT / "draft_showdown_bot.egg-info").exists()

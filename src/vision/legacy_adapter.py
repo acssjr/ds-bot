@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from importlib import resources
+from os import PathLike
 from pathlib import Path
 from typing import Any
 
@@ -9,14 +11,38 @@ from src.vision.pipeline import VisionPipeline
 
 
 class LegacyVisionAdapter:
-    def __init__(self, templates_dir: str = "assets/templates"):
-        root = Path(__file__).resolve().parents[2]
-        configured = Path(templates_dir)
-        resolved = configured if configured.is_absolute() else root / configured
-        resolved = resolved.resolve()
+    def __init__(
+        self,
+        templates_dir: str | PathLike[str] | None = None,
+    ) -> None:
+        if templates_dir is None:
+            self._pipeline = self._pipeline_from_packaged_templates()
+            return
+
+        resolved = Path(templates_dir).expanduser().resolve()
         if not resolved.is_dir():
             raise FileNotFoundError(f"templates directory does not exist: {resolved}")
         self._pipeline = VisionPipeline(templates_dir=str(resolved))
+
+    @staticmethod
+    def _pipeline_from_packaged_templates() -> VisionPipeline:
+        try:
+            templates = resources.files("assets").joinpath("templates")
+        except (ModuleNotFoundError, TypeError) as exc:
+            raise FileNotFoundError(
+                "packaged templates resource is unavailable"
+            ) from exc
+        if not templates.is_dir():
+            raise FileNotFoundError("packaged templates directory is unavailable")
+
+        # ScreenClassifier loads every image eagerly, so extracted zip resources
+        # can be released as soon as VisionPipeline construction completes.
+        with resources.as_file(templates) as materialized:
+            if not materialized.is_dir():
+                raise FileNotFoundError(
+                    "packaged templates directory could not be materialized"
+                )
+            return VisionPipeline(templates_dir=str(materialized))
 
     def analyze(self, image, *, cancellation: CancellationToken | None = None) -> dict[str, Any]:
         if cancellation is not None:

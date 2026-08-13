@@ -1,4 +1,5 @@
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -11,6 +12,7 @@ from src.core.lifecycle import Lifecycle, RuntimeStatus
 from src.main import build_parser
 from src.runtime.bot_runtime import BotRuntime, RuntimeSettings
 from src.state.game_state import ScreenState
+from src.vision.classifiers.screen_classifier import ScreenClassifier
 from src.vision.legacy_adapter import LegacyVisionAdapter
 from src.vision.pipeline import VisionPipeline
 
@@ -153,6 +155,29 @@ def test_legacy_adapter_normalizes_invalid_screen_to_unknown(legacy_screen) -> N
 def test_legacy_adapter_fails_early_for_missing_templates() -> None:
     with pytest.raises(FileNotFoundError, match="templates"):
         LegacyVisionAdapter("does-not-exist")
+
+
+def test_screen_classifier_does_not_create_missing_templates_directory(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "missing-templates"
+
+    with pytest.raises(FileNotFoundError, match="templates"):
+        ScreenClassifier(str(missing))
+
+    assert not missing.exists()
+
+
+def test_legacy_adapter_supports_explicit_relative_templates_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    templates = tmp_path / "custom-templates"
+    templates.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    adapter = LegacyVisionAdapter("custom-templates")
+
+    assert Path(adapter._pipeline.screen_classifier.templates_dir) == templates.resolve()
 
 
 def test_legacy_pipeline_does_not_fabricate_card_choices() -> None:

@@ -34,9 +34,10 @@ class ScreenClassifier:
 
     def _load_templates(self) -> None:
         """Carrega todos os arquivos .png salvos no diretório assets/templates/."""
-        if not os.path.exists(self.templates_dir):
-            os.makedirs(self.templates_dir, exist_ok=True)
-            return
+        if not os.path.isdir(self.templates_dir):
+            raise FileNotFoundError(
+                f"templates directory does not exist: {self.templates_dir}"
+            )
 
         for folder, state in self.folder_to_state.items():
             folder_path = os.path.join(self.templates_dir, folder)

@@ -36,9 +36,18 @@ def test_setuptools_explicitly_discovers_src_namespace_packages() -> None:
 
     assert package_find == {
         "where": ["."],
-        "include": ["src", "src.*"],
+        "include": ["src", "src.*", "assets"],
         "namespaces": True,
     }
+    assert metadata["tool"]["setuptools"]["package-data"]["assets"] == [
+        "templates/*.png",
+        "templates/*.jpg",
+        "templates/*.jpeg",
+        "templates/**/*.png",
+        "templates/**/*.jpg",
+        "templates/**/*.jpeg",
+    ]
+    assert (PROJECT_ROOT / "assets/__init__.py").is_file()
 
 
 def test_configured_console_script_resolves_to_a_callable() -> None:
