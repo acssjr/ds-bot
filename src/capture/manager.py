@@ -28,7 +28,14 @@ class CaptureManager:
     def start(self) -> None:
         if self._started:
             return
-        self._source.start()
+        try:
+            self._source.start()
+        except Exception as primary_error:
+            try:
+                self._source.stop()
+            except Exception as rollback_error:
+                primary_error.add_note(f"rollback also failed: {rollback_error!r}")
+            raise
         self._last_frame = None
         self._started = True
 

@@ -28,7 +28,7 @@ def _require_non_negative_finite_real(name: str, value: object) -> None:
         raise ValueError(f"{name} must be non-negative")
 
 
-def _immutable_bgr_image(image: object) -> np.ndarray:
+def _validated_bgr_image(image: object) -> np.ndarray:
     if not isinstance(image, np.ndarray):
         raise TypeError("image must be a NumPy array")
     if image.ndim != 3 or image.shape[2] != 3:
@@ -37,7 +37,21 @@ def _immutable_bgr_image(image: object) -> np.ndarray:
         raise ValueError("image dimensions must be positive")
     if image.dtype != np.uint8:
         raise ValueError("image dtype must be uint8")
-    contiguous = np.ascontiguousarray(image)
+    return image
+
+
+def _is_bytes_backed(image: np.ndarray) -> bool:
+    base: object = image
+    while isinstance(base, np.ndarray):
+        base = base.base
+    return isinstance(base, bytes)
+
+
+def _immutable_bgr_image(image: object) -> np.ndarray:
+    array = _validated_bgr_image(image)
+    if not array.flags.writeable and _is_bytes_backed(array):
+        return array
+    contiguous = np.ascontiguousarray(array)
     immutable = np.frombuffer(contiguous.tobytes(order="C"), dtype=np.uint8).reshape(contiguous.shape)
     immutable.setflags(write=False)
     return immutable

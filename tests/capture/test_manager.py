@@ -7,7 +7,7 @@ from PIL import Image
 
 from src.capture.adb_source import ADBCaptureSource
 from src.capture.manager import CaptureManager
-from src.capture.models import CaptureBackend, CaptureRequest, CapturedImage
+from src.capture.models import CaptureBackend, CaptureRequest, CapturedImage, Frame
 from src.capture.replay import ReplayCaptureSource, ReplayExhausted
 
 
@@ -254,3 +254,52 @@ def test_replay_decode_failure_does_not_consume_path(tmp_path: Path) -> None:
     assert cv2.imwrite(str(invalid), np.full((3, 4, 3), 1, dtype=np.uint8))
     assert int(replay.capture().image[0, 0, 0]) == 1
     assert int(replay.capture().image[0, 0, 0]) == 2
+
+
+def test_manager_rolls_back_partial_start_without_masking_primary_error() -> None:
+    class PartiallyStartedSource:
+        def __init__(self):
+            self.started = False
+            self.stopped = False
+            self.stop_calls = 0
+
+        def start(self) -> None:
+            self.started = True
+            raise RuntimeError("start failed")
+
+        def capture(self) -> CapturedImage:
+            raise AssertionError("capture must not run")
+
+        def stop(self) -> None:
+            self.stop_calls += 1
+            self.stopped = True
+            raise RuntimeError("rollback failed")
+
+    source = PartiallyStartedSource()
+    manager = CaptureManager(source, device_serial="replay", connection_generation=lambda: 0)
+
+    with pytest.raises(RuntimeError, match="start failed") as caught:
+        manager.start()
+
+    assert source.stop_calls == 1
+    assert source.started and source.stopped
+    assert any("rollback also failed" in note for note in caught.value.__notes__)
+    with pytest.raises(RuntimeError, match="not started"):
+        manager.next_frame(CaptureRequest.fresh_required())
+
+
+def test_frame_reuses_captured_image_buffer_while_preserving_immutability() -> None:
+    image = np.zeros((2, 3, 3), dtype=np.uint8)
+    captured = CapturedImage(image, 1.0, CaptureBackend.REPLAY)
+    frame = Frame.from_capture(
+        captured,
+        frame_id=1,
+        device_serial="replay",
+        connection_generation=0,
+        capture_generation=0,
+    )
+
+    assert frame.image is captured.image
+    assert not frame.image.flags.writeable
+    with pytest.raises(ValueError):
+        frame.image[0, 0, 0] = 1

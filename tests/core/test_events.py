@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from src.core.events import EventBus, EventKind, RuntimeEvent
+from src.core.events import EventBus, EventKind, LoggingEventSink, RuntimeEvent
 
 
 def test_event_bus_preserves_fifo_order() -> None:
@@ -38,6 +38,34 @@ def test_runtime_event_rejects_invalid_timestamp(timestamp) -> None:
 def test_event_bus_rejects_non_event() -> None:
     with pytest.raises(TypeError, match="RuntimeEvent"):
         EventBus().publish(object())
+
+
+def test_event_bus_drops_oldest_at_capacity_and_reports_count() -> None:
+    bus = EventBus(capacity=2)
+    for frame_id in range(1, 4):
+        bus.publish(RuntimeEvent(EventKind.FRAME, float(frame_id), {"frame_id": frame_id}))
+
+    assert bus.dropped_count == 1
+    assert [event.payload["frame_id"] for event in bus.drain()] == [2, 3]
+
+
+@pytest.mark.parametrize("capacity", [True, 0, -1, 1.5])
+def test_event_bus_rejects_invalid_capacity(capacity) -> None:
+    with pytest.raises((TypeError, ValueError), match="capacity"):
+        EventBus(capacity=capacity)
+
+
+def test_logging_sink_logs_each_event_immediately() -> None:
+    messages = []
+
+    class Logger:
+        def info(self, *args):
+            messages.append(args)
+
+    sink = LoggingEventSink(Logger())
+    sink.publish(RuntimeEvent(EventKind.FRAME, 1.0, {"frame_id": 7}))
+
+    assert messages == [("{} | {}", "frame", {"frame_id": 7})]
 
 
 @pytest.mark.parametrize("limit", [True, 0, -1, 1.5, math.nan])

@@ -12,6 +12,7 @@ from src.main import build_parser
 from src.runtime.bot_runtime import BotRuntime, RuntimeSettings
 from src.state.game_state import ScreenState
 from src.vision.legacy_adapter import LegacyVisionAdapter
+from src.vision.pipeline import VisionPipeline
 
 
 class OneFrameSource:
@@ -42,7 +43,7 @@ class FailingPerception:
         raise RuntimeError("vision failed")
 
 
-def build_runtime(source, perception, *, events=None, settings=None):
+def build_runtime(source, perception, *, events=None, settings=None, cancellation=None):
     manager = CaptureManager(
         source,
         device_serial="replay",
@@ -56,7 +57,7 @@ def build_runtime(source, perception, *, events=None, settings=None):
         perception=perception,
         events=event_bus,
         lifecycle=lifecycle,
-        cancellation=CancellationToken(),
+        cancellation=cancellation or CancellationToken(),
         settings=settings or RuntimeSettings(poll_interval_seconds=0.0),
         clock=lambda: 1.0,
     )
@@ -142,6 +143,29 @@ def test_legacy_adapter_removes_fabricated_choices_and_numpy_shape() -> None:
     assert result == {"screen": "UNKNOWN", "confidence": 0.0, "sub_element": None}
 
 
+@pytest.mark.parametrize("legacy_screen", [None, "not-a-screen", 4])
+def test_legacy_adapter_normalizes_invalid_screen_to_unknown(legacy_screen) -> None:
+    adapter = LegacyVisionAdapter.__new__(LegacyVisionAdapter)
+    adapter._pipeline = type("Pipeline", (), {"analyze": lambda self, image: {"screen": legacy_screen}})()
+    assert adapter.analyze(np.zeros((1, 1, 3), dtype=np.uint8))["screen"] == "UNKNOWN"
+
+
+def test_legacy_adapter_fails_early_for_missing_templates() -> None:
+    with pytest.raises(FileNotFoundError, match="templates"):
+        LegacyVisionAdapter("does-not-exist")
+
+
+def test_legacy_pipeline_does_not_fabricate_card_choices() -> None:
+    pipeline = VisionPipeline.__new__(VisionPipeline)
+    pipeline.screen_classifier = type(
+        "Classifier", (), {"classify": lambda self, image: (ScreenState.UNKNOWN, 0.0, None)}
+    )()
+
+    result = pipeline.analyze(np.zeros((2, 3, 3), dtype=np.uint8))
+
+    assert "available_choices" not in result
+
+
 def test_cli_requires_exactly_one_capture_source() -> None:
     parser = build_parser()
     with pytest.raises(SystemExit):
@@ -149,3 +173,115 @@ def test_cli_requires_exactly_one_capture_source() -> None:
     with pytest.raises(SystemExit):
         parser.parse_args(["--device", "A", "--replay", "screenshots"])
     assert parser.parse_args(["--device", "A"]).device == "A"
+
+
+def test_runtime_is_single_use() -> None:
+    runtime, _, _ = build_runtime(OneFrameSource(), FakePerception())
+    assert runtime.run(max_frames=1) == 1
+    with pytest.raises(RuntimeError, match="single-use"):
+        runtime.run(max_frames=1)
+
+
+def test_pre_cancelled_runtime_does_not_start_capture_or_lifecycle() -> None:
+    token = CancellationToken()
+    token.cancel()
+    source = OneFrameSource()
+    runtime, events, lifecycle = build_runtime(source, FakePerception(), cancellation=token)
+
+    assert runtime.run(max_frames=1) == 0
+    assert not source.started and not source.stopped
+    assert lifecycle.status is RuntimeStatus.STOPPED
+    assert events.drain() == []
+
+
+def test_runtime_does_not_start_capture_when_cancelled_after_starting_event() -> None:
+    token = CancellationToken()
+
+    class CancellingSink(EventBus):
+        def publish(self, event) -> None:
+            super().publish(event)
+            if event.kind is EventKind.LIFECYCLE and event.payload["status"] == "starting":
+                token.cancel()
+
+    source = OneFrameSource()
+    runtime, events, lifecycle = build_runtime(source, FakePerception(), events=CancellingSink(), cancellation=token)
+
+    assert runtime.run(max_frames=1) == 0
+    assert not source.started and not source.stopped
+    assert lifecycle.status is RuntimeStatus.STOPPED
+    assert [event.payload["status"] for event in events.drain()] == ["starting", "stopping", "stopped"]
+
+
+def test_runtime_stops_after_cancellation_observed_between_capture_and_analyze() -> None:
+    token = CancellationToken()
+
+    class CancellingSource(OneFrameSource):
+        def capture(self) -> CapturedImage:
+            token.cancel()
+            return super().capture()
+
+    source = CancellingSource()
+    runtime, events, lifecycle = build_runtime(source, FakePerception(), cancellation=token)
+
+    assert runtime.run(max_frames=1) == 0
+    assert source.stopped
+    assert lifecycle.status is RuntimeStatus.STOPPED
+    assert [event.kind for event in events.drain()] == [
+        EventKind.LIFECYCLE,
+        EventKind.LIFECYCLE,
+        EventKind.LIFECYCLE,
+        EventKind.LIFECYCLE,
+    ]
+
+
+def test_runtime_stops_after_cancellation_observed_between_analyze_and_observation() -> None:
+    token = CancellationToken()
+
+    class CancellingPerception:
+        def analyze(self, image):
+            token.cancel()
+            return {"screen": "UNKNOWN"}
+
+    runtime, events, lifecycle = build_runtime(OneFrameSource(), CancellingPerception(), cancellation=token)
+
+    assert runtime.run(max_frames=1) == 0
+    assert lifecycle.status is RuntimeStatus.STOPPED
+    assert [event.kind for event in events.drain()] == [
+        EventKind.LIFECYCLE,
+        EventKind.LIFECYCLE,
+        EventKind.FRAME,
+        EventKind.LIFECYCLE,
+        EventKind.LIFECYCLE,
+    ]
+
+
+def test_runtime_requires_mapping_perception_result() -> None:
+    class PairPerception:
+        def analyze(self, image):
+            return [("screen", "UNKNOWN")]
+
+    runtime, _, lifecycle = build_runtime(OneFrameSource(), PairPerception())
+    with pytest.raises(TypeError, match="Mapping"):
+        runtime.run(max_frames=1)
+    assert lifecycle.status is RuntimeStatus.FAILED
+
+
+def test_runtime_requires_string_observation_keys() -> None:
+    class InvalidKeyPerception:
+        def analyze(self, image):
+            return {1: "UNKNOWN"}
+
+    runtime, _, lifecycle = build_runtime(OneFrameSource(), InvalidKeyPerception())
+    with pytest.raises(TypeError, match="strings"):
+        runtime.run(max_frames=1)
+    assert lifecycle.status is RuntimeStatus.FAILED
+
+
+def test_sink_failure_does_not_override_authoritative_lifecycle_state() -> None:
+    class FailingSink:
+        def publish(self, event) -> None:
+            raise RuntimeError("sink unavailable")
+
+    runtime, _, lifecycle = build_runtime(OneFrameSource(), FakePerception(), events=FailingSink())
+    assert runtime.run(max_frames=1) == 1
+    assert lifecycle.status is RuntimeStatus.STOPPED

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from numbers import Real
-from queue import Empty, SimpleQueue
+from threading import Lock
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Protocol
 
 
 class EventKind(str, Enum):
@@ -16,6 +17,10 @@ class EventKind(str, Enum):
     OBSERVATION = "observation"
     INPUT = "input"
     ERROR = "error"
+
+
+class EventSink(Protocol):
+    def publish(self, event: "RuntimeEvent") -> None: ...
 
 
 def _freeze(value: Any) -> Any:
@@ -49,23 +54,49 @@ class RuntimeEvent:
 
 
 class EventBus:
-    def __init__(self) -> None:
-        self._queue: SimpleQueue[RuntimeEvent] = SimpleQueue()
+    """Bounded, non-blocking event sink that drops the oldest retained event."""
+
+    def __init__(self, capacity: int = 1000) -> None:
+        if isinstance(capacity, bool) or not isinstance(capacity, int):
+            raise TypeError("capacity must be an integer")
+        if capacity <= 0:
+            raise ValueError("capacity must be positive")
+        self._capacity = capacity
+        self._queue: deque[RuntimeEvent] = deque()
+        self._dropped_count = 0
+        self._lock = Lock()
+
+    @property
+    def dropped_count(self) -> int:
+        with self._lock:
+            return self._dropped_count
 
     def publish(self, event: RuntimeEvent) -> None:
         if not isinstance(event, RuntimeEvent):
             raise TypeError("event must be a RuntimeEvent")
-        self._queue.put(event)
+        with self._lock:
+            if len(self._queue) == self._capacity:
+                self._queue.popleft()
+                self._dropped_count += 1
+            self._queue.append(event)
 
     def drain(self, limit: int = 1000) -> list[RuntimeEvent]:
         if isinstance(limit, bool) or not isinstance(limit, int):
             raise TypeError("limit must be an integer")
         if limit <= 0:
             raise ValueError("limit must be positive")
-        events: list[RuntimeEvent] = []
-        while len(events) < limit:
-            try:
-                events.append(self._queue.get_nowait())
-            except Empty:
-                break
-        return events
+        with self._lock:
+            count = min(limit, len(self._queue))
+            return [self._queue.popleft() for _ in range(count)]
+
+
+class LoggingEventSink:
+    """Synchronous CLI sink; events are logged as they are produced, never buffered."""
+
+    def __init__(self, logger: Any) -> None:
+        self._logger = logger
+
+    def publish(self, event: RuntimeEvent) -> None:
+        if not isinstance(event, RuntimeEvent):
+            raise TypeError("event must be a RuntimeEvent")
+        self._logger.info("{} | {}", event.kind.value, dict(event.payload))
