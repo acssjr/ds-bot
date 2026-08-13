@@ -27,7 +27,7 @@ class ADBCaptureSource:
         if not self._started:
             raise RuntimeError("ADB capture source is not started")
         captured_at_monotonic = self._clock()
-        rgb = np.asarray(self._session.screenshot())
+        rgb = np.asarray(self._session.screencap_png())
         if rgb.ndim != 3 or rgb.shape[2] not in (3, 4):
             raise ValueError(f"unexpected screenshot shape: {rgb.shape!r}")
         conversion = cv2.COLOR_RGBA2BGR if rgb.shape[2] == 4 else cv2.COLOR_RGB2BGR

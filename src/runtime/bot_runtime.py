@@ -4,7 +4,9 @@ import math
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from inspect import Parameter, signature
 from numbers import Real
+from threading import Lock
 from typing import Any, Protocol
 
 from src.capture.manager import CaptureManager
@@ -15,7 +17,7 @@ from src.core.lifecycle import Lifecycle, RuntimeStatus
 
 
 class Perception(Protocol):
-    def analyze(self, image: Any) -> Mapping[str, Any]: ...
+    def analyze(self, image: Any, *, cancellation: CancellationToken | None = None) -> Mapping[str, Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,9 +54,20 @@ class BotRuntime:
         self._settings = settings
         self._clock = clock
         self._used = False
+        self._used_lock = Lock()
 
     def _event(self, kind: EventKind, payload: dict[str, Any]) -> RuntimeEvent:
         return RuntimeEvent(kind=kind, emitted_at_monotonic=self._clock(), payload=payload)
+
+    def _control_event(self, kind: EventKind, payload: dict[str, Any]) -> RuntimeEvent | None:
+        """Lifecycle/error telemetry never controls cleanup; use a reliable clock fallback."""
+        try:
+            return self._event(kind, payload)
+        except Exception:
+            try:
+                return RuntimeEvent(kind=kind, emitted_at_monotonic=time.monotonic(), payload=payload)
+            except Exception:
+                return None
 
     def _publish(self, event: RuntimeEvent, *, note_error: BaseException | None = None) -> None:
         """Event publication is best-effort; Lifecycle is the authoritative state."""
@@ -66,10 +79,28 @@ class BotRuntime:
 
     def _transition(self, target: RuntimeStatus) -> None:
         self._lifecycle.transition(target)
-        self._publish(self._event(EventKind.LIFECYCLE, {"status": target.value}))
+        event = self._control_event(EventKind.LIFECYCLE, {"status": target.value})
+        if event is not None:
+            self._publish(event)
 
     def _publish_error(self, exc: BaseException, *, phase: str) -> None:
-        self._publish(self._event(EventKind.ERROR, {"phase": phase, "error": repr(exc)}), note_error=exc)
+        event = self._control_event(EventKind.ERROR, {"phase": phase, "error": repr(exc)})
+        if event is not None:
+            self._publish(event, note_error=exc)
+
+    def _analyze(self, image: Any) -> Mapping[str, Any]:
+        analyze = self._perception.analyze
+        try:
+            parameters = signature(analyze).parameters.values()
+        except (TypeError, ValueError):
+            return analyze(image)
+        accepts_cancellation = any(
+            parameter.name == "cancellation" or parameter.kind is Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+        if accepts_cancellation:
+            return analyze(image, cancellation=self._cancellation)
+        return analyze(image)
 
     def _mark_failed(self, primary_error: BaseException) -> None:
         if self._lifecycle.status is RuntimeStatus.FAILED:
@@ -90,9 +121,10 @@ class BotRuntime:
 
     def run(self, max_frames: int | None = None) -> int:
         self._validate_max_frames(max_frames)
-        if self._used:
-            raise RuntimeError("BotRuntime is single-use")
-        self._used = True
+        with self._used_lock:
+            if self._used:
+                raise RuntimeError("BotRuntime is single-use")
+            self._used = True
         if self._cancellation.cancelled:
             return 0
 
@@ -127,7 +159,7 @@ class BotRuntime:
                     )
                 )
                 self._cancellation.raise_if_cancelled()
-                raw_observation = self._perception.analyze(frame.image)
+                raw_observation = self._analyze(frame.image)
                 self._cancellation.raise_if_cancelled()
                 if not isinstance(raw_observation, Mapping):
                     raise TypeError("perception result must be a Mapping")

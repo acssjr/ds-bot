@@ -5,6 +5,7 @@ from loguru import logger
 from typing import Dict, Tuple, Optional, Any
 
 from src.state.game_state import ScreenState
+from src.core.cancellation import CancellationToken
 from src.utils.coordinates import CoordinateConverter
 
 class ScreenClassifier:
@@ -50,10 +51,14 @@ class ScreenClassifier:
                             self.templates[state].append((fname, tpl))
                             logger.debug(f"Template carregado [{state.value}]: {fname}")
 
-    def classify(self, frame: np.ndarray) -> Tuple[ScreenState, float, Optional[str]]:
+    def classify(
+        self, frame: np.ndarray, *, cancellation: CancellationToken | None = None
+    ) -> Tuple[ScreenState, float, Optional[str]]:
         """
         Analisa o frame e retorna (ScreenState, confidence, sub_element_name).
         """
+        if cancellation is not None:
+            cancellation.raise_if_cancelled()
         if frame is None:
             return (ScreenState.UNKNOWN, 0.0, None)
 
@@ -63,10 +68,14 @@ class ScreenClassifier:
 
         for state, tpl_list in self.templates.items():
             for fname, tpl in tpl_list:
+                if cancellation is not None:
+                    cancellation.raise_if_cancelled()
                 if frame.shape[0] < tpl.shape[0] or frame.shape[1] < tpl.shape[1]:
                     continue
 
                 res = cv2.matchTemplate(frame, tpl, cv2.TM_CCOEFF_NORMED)
+                if cancellation is not None:
+                    cancellation.raise_if_cancelled()
                 _, max_val, _, _ = cv2.minMaxLoc(res)
 
                 if max_val > best_val and max_val >= self.threshold:

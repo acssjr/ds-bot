@@ -30,10 +30,10 @@ class CaptureManager:
             return
         try:
             self._source.start()
-        except Exception as primary_error:
+        except BaseException as primary_error:
             try:
                 self._source.stop()
-            except Exception as rollback_error:
+            except BaseException as rollback_error:
                 primary_error.add_note(f"rollback also failed: {rollback_error!r}")
             raise
         self._last_frame = None

@@ -67,6 +67,9 @@ class FakeSession:
             self.on_screenshot()
         return Image.fromarray(self.image)
 
+    def screencap_png(self):
+        return self.screenshot(error_ok=False)
+
 
 def test_adb_source_requires_active_lifecycle_and_converts_rgb_to_bgr() -> None:
     session = FakeSession()
@@ -86,6 +89,30 @@ def test_adb_source_requires_active_lifecycle_and_converts_rgb_to_bgr() -> None:
     assert captured.image.tolist() == [[[0, 0, 255], [0, 255, 0]]]
     with pytest.raises(RuntimeError, match="not started"):
         source.capture()
+
+
+def test_adb_source_uses_only_dedicated_observe_only_screencap() -> None:
+    class ObserveOnlySession:
+        connected = False
+        connection_generation = 0
+
+        def connect(self) -> None:
+            self.connected = True
+            self.connection_generation += 1
+
+        def screencap_png(self):
+            return Image.fromarray(np.array([[[255, 0, 0]]], dtype=np.uint8))
+
+        def __getattr__(self, name):
+            if name in {"click", "swipe", "shell", "stop_app", "start_app", "screenshot"}:
+                raise AssertionError(f"unsafe operation requested: {name}")
+            raise AttributeError(name)
+
+    source = ADBCaptureSource(ObserveOnlySession(), clock=lambda: 3.0)
+    source.start()
+    captured = source.capture()
+
+    assert captured.image.tolist() == [[[0, 0, 255]]]
 
 
 def test_adb_source_samples_timestamp_before_screenshot() -> None:
@@ -286,6 +313,27 @@ def test_manager_rolls_back_partial_start_without_masking_primary_error() -> Non
     assert any("rollback also failed" in note for note in caught.value.__notes__)
     with pytest.raises(RuntimeError, match="not started"):
         manager.next_frame(CaptureRequest.fresh_required())
+
+
+def test_manager_rolls_back_partial_start_for_keyboard_interrupt() -> None:
+    class InterruptedSource:
+        def __init__(self):
+            self.stopped = False
+
+        def start(self) -> None:
+            raise KeyboardInterrupt("interrupted")
+
+        def capture(self) -> CapturedImage:
+            raise AssertionError("capture must not run")
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    source = InterruptedSource()
+    manager = CaptureManager(source, device_serial="replay", connection_generation=lambda: 0)
+    with pytest.raises(KeyboardInterrupt, match="interrupted"):
+        manager.start()
+    assert source.stopped
 
 
 def test_frame_reuses_captured_image_buffer_while_preserving_immutability() -> None:

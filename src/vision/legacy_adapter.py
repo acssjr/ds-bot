@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from src.state.game_state import ScreenState
+from src.core.cancellation import CancellationToken
 from src.vision.pipeline import VisionPipeline
 
 
@@ -17,8 +18,15 @@ class LegacyVisionAdapter:
             raise FileNotFoundError(f"templates directory does not exist: {resolved}")
         self._pipeline = VisionPipeline(templates_dir=str(resolved))
 
-    def analyze(self, image) -> dict[str, Any]:
-        result = dict(self._pipeline.analyze(image))
+    def analyze(self, image, *, cancellation: CancellationToken | None = None) -> dict[str, Any]:
+        if cancellation is not None:
+            cancellation.raise_if_cancelled()
+        if cancellation is None:
+            result = dict(self._pipeline.analyze(image))
+        else:
+            result = dict(self._pipeline.analyze(image, cancellation=cancellation))
+        if cancellation is not None:
+            cancellation.raise_if_cancelled()
         screen = result.get("screen", ScreenState.UNKNOWN)
         try:
             result["screen"] = screen.value if isinstance(screen, ScreenState) else ScreenState(screen).value

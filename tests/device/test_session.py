@@ -1,3 +1,6 @@
+from io import BytesIO
+
+from PIL import Image
 import pytest
 
 from src.device.session import (
@@ -14,6 +17,7 @@ class FakeDevice:
         self.clicks: list[tuple[int, int]] = []
         self.swipes: list[tuple[int, int, int, int, float]] = []
         self.shell_commands: list[str] = []
+        self.shell_call_options: list[tuple[object, object, object]] = []
         self.stopped_apps: list[str] = []
         self.started_apps: list[str] = []
         self.screenshot_error_ok: list[bool] = []
@@ -37,9 +41,10 @@ class FakeDevice:
         self._raise_if_configured("swipe")
         self.swipes.append((x1, y1, x2, y2, duration_seconds))
 
-    def shell(self, command: str) -> str | bytes:
+    def shell(self, command, *, encoding="default", timeout=None) -> str | bytes:
         self._raise_if_configured("shell")
         self.shell_commands.append(command)
+        self.shell_call_options.append((command, encoding, timeout))
         return self.shell_result
 
     def app_stop(self, package_name: str) -> None:
@@ -216,3 +221,30 @@ def test_shell_rejects_non_string_results() -> None:
 
     with pytest.raises(DeviceSessionError, match="unexpected shell result.*B"):
         session.shell("echo test")
+
+
+def test_screencap_uses_dedicated_binary_shell_command_with_timeout() -> None:
+    image_bytes = BytesIO()
+    Image.new("RGB", (2, 1), (1, 2, 3)).save(image_bytes, format="PNG")
+    client = FakeAdbClient(["B"])
+    client.devices["B"].shell_result = image_bytes.getvalue()
+    session = DeviceSession("B", adb_client=client, timeout_seconds=2.5)
+    session.connect()
+
+    image = session.screencap_png()
+
+    assert image.mode == "RGB"
+    assert image.size == (2, 1)
+    assert client.devices["B"].shell_call_options[-1] == (["screencap", "-p"], None, 2.5)
+
+
+def test_screencap_errors_preserve_original_cause() -> None:
+    client = FakeAdbClient(["B"])
+    error = RuntimeError("screencap failed")
+    client.devices["B"].failures["shell"] = error
+    session = DeviceSession("B", adb_client=client)
+    session.connect()
+
+    with pytest.raises(DeviceSessionError, match="screencap.*B") as caught:
+        session.screencap_png()
+    assert caught.value.__cause__ is error

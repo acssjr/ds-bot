@@ -42,3 +42,19 @@ def test_main_returns_configuration_error_without_traceback_when_runtime_constru
 
     monkeypatch.setattr("src.main.LegacyVisionAdapter", missing_templates)
     assert main(["--replay", str(tmp_path), "--frames", "1"]) == 2
+
+
+def test_main_catches_operational_session_construction_failure(monkeypatch) -> None:
+    def failing_session(serial):
+        raise RuntimeError("adb unavailable")
+
+    monkeypatch.setattr("src.main.DeviceSession", failing_session)
+    assert main(["--device", "offline"]) == 1
+
+
+def test_main_catches_keyboard_interrupt_before_runtime_run(monkeypatch) -> None:
+    def interrupted_session(serial):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr("src.main.DeviceSession", interrupted_session)
+    assert main(["--device", "offline"]) == 130

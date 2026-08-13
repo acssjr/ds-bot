@@ -24,13 +24,24 @@ class EventSink(Protocol):
 
 
 def _freeze(value: Any) -> Any:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("payload floats must be finite")
+        return value
     if isinstance(value, Mapping):
-        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+        frozen: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("payload mapping keys must be strings")
+            frozen[key] = _freeze(item)
+        return MappingProxyType(frozen)
     if isinstance(value, (list, tuple)):
         return tuple(_freeze(item) for item in value)
     if isinstance(value, (set, frozenset)):
         return frozenset(_freeze(item) for item in value)
-    return value
+    raise TypeError(f"unsupported payload value: {type(value).__name__}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,19 +76,52 @@ class EventBus:
         self._queue: deque[RuntimeEvent] = deque()
         self._dropped_count = 0
         self._lock = Lock()
+        self._latest_lifecycle: RuntimeEvent | None = None
+        self._latest_error: RuntimeEvent | None = None
 
     @property
     def dropped_count(self) -> int:
         with self._lock:
             return self._dropped_count
 
+    @property
+    def latest_lifecycle(self) -> RuntimeEvent | None:
+        with self._lock:
+            return self._latest_lifecycle
+
+    @property
+    def latest_error(self) -> RuntimeEvent | None:
+        with self._lock:
+            return self._latest_error
+
+    @staticmethod
+    def _is_control(event: RuntimeEvent) -> bool:
+        return event.kind in {EventKind.LIFECYCLE, EventKind.ERROR, EventKind.INPUT}
+
+    def _drop_oldest(self, predicate) -> bool:
+        for index, queued in enumerate(self._queue):
+            if predicate(queued):
+                del self._queue[index]
+                self._dropped_count += 1
+                return True
+        return False
+
     def publish(self, event: RuntimeEvent) -> None:
         if not isinstance(event, RuntimeEvent):
             raise TypeError("event must be a RuntimeEvent")
         with self._lock:
+            if event.kind is EventKind.LIFECYCLE:
+                self._latest_lifecycle = event
+            elif event.kind is EventKind.ERROR:
+                self._latest_error = event
             if len(self._queue) == self._capacity:
-                self._queue.popleft()
-                self._dropped_count += 1
+                if self._is_control(event):
+                    if not self._drop_oldest(lambda queued: not self._is_control(queued)):
+                        self._queue.popleft()
+                        self._dropped_count += 1
+                elif not self._drop_oldest(lambda queued: not self._is_control(queued)):
+                    self._dropped_count += 1
+                    return
             self._queue.append(event)
 
     def drain(self, limit: int = 1000) -> list[RuntimeEvent]:

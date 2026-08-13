@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import math
+from io import BytesIO
+from numbers import Real
 from typing import Any
 
 import adbutils
+from PIL import Image
 
 
 class DeviceSessionError(RuntimeError):
@@ -18,13 +22,18 @@ class DeviceNotConnected(DeviceSessionError):
 
 
 class DeviceSession:
-    def __init__(self, serial: str, *, adb_client: Any = None):
+    def __init__(self, serial: str, *, adb_client: Any = None, timeout_seconds: float = 10.0):
         if not isinstance(serial, str):
             raise TypeError("serial must be a string")
         if not serial or not serial.strip():
             raise ValueError("an explicit serial is required")
+        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, Real):
+            raise TypeError("timeout_seconds must be a real number")
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be finite and positive")
         self._serial = serial.strip()
-        self._adb = adb_client if adb_client is not None else adbutils.adb
+        self._timeout_seconds = float(timeout_seconds)
+        self._adb = adb_client if adb_client is not None else adbutils.AdbClient(socket_timeout=self._timeout_seconds)
         self._device: Any = None
         self._connection_generation = 0
 
@@ -80,6 +89,25 @@ class DeviceSession:
 
     def screenshot(self):
         return self._invoke("screenshot", "screenshot", error_ok=False)
+
+    def screencap_png(self) -> Image.Image:
+        try:
+            payload = self._invoke(
+                "screencap",
+                "shell",
+                ["screencap", "-p"],
+                encoding=None,
+                timeout=self._timeout_seconds,
+            )
+            if not isinstance(payload, bytes):
+                raise TypeError(f"unexpected screencap result: {type(payload).__name__}")
+            image = Image.open(BytesIO(payload))
+            image.load()
+            return image
+        except DeviceSessionError:
+            raise
+        except Exception as exc:
+            raise DeviceSessionError(f"ADB operation 'screencap' failed for {self._serial!r}") from exc
 
     def click(self, x: int, y: int) -> None:
         self._invoke("click", "click", x, y)

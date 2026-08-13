@@ -82,11 +82,17 @@ def main(argv: list[str] | None = None) -> int:
         connection_generation = lambda: 0
         max_frames = args.frames if args.frames is not None else len(paths)
     else:
-        session = DeviceSession(args.device)
-        source = ADBCaptureSource(session)
-        serial = session.serial
-        connection_generation = lambda: session.connection_generation
-        max_frames = args.frames
+        try:
+            session = DeviceSession(args.device)
+            source = ADBCaptureSource(session)
+            serial = session.serial
+            connection_generation = lambda: session.connection_generation
+            max_frames = args.frames
+        except KeyboardInterrupt:
+            return 130
+        except Exception as exc:
+            logger.error("runtime setup failed: {}", exc)
+            return 1
 
     try:
         capture = CaptureManager(source, device_serial=serial, connection_generation=connection_generation)
@@ -98,9 +104,14 @@ def main(argv: list[str] | None = None) -> int:
             cancellation=cancellation,
             settings=RuntimeSettings(args.interval),
         )
+    except KeyboardInterrupt:
+        return 130
     except (FileNotFoundError, TypeError, ValueError) as exc:
         logger.error("runtime configuration is invalid: {}", exc)
         return 2
+    except Exception as exc:
+        logger.error("runtime setup failed: {}", exc)
+        return 1
 
     logger.warning("OBSERVE-ONLY: no taps or swipes can be sent by this runtime")
     try:
