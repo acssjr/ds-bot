@@ -182,4 +182,58 @@ Quando continuar o desenvolvimento no ChatGPT, sugere-se seguir a seguinte ordem
 
 ---
 
-*Fim do documento de handoff. O projeto está 100% funcional, testado e estruturado.*
+## 8. ATUALIZAÇÃO VALIDADA — 13/08/2026
+
+Esta seção substitui afirmações antigas deste documento quando houver conflito. O runtime principal continua **observe-first**: a GUI ainda não executa gameplay automaticamente. Os taps da partida descrita abaixo foram enviados por um executor experimental supervisionado, fora do entrypoint seguro da GUI.
+
+### Estado atual validado
+
+* Captura ADB tolera frames pretos e se recupera sem encerrar a observação.
+* Dispositivo único é selecionado automaticamente e apresentado como `MEmu · 127.0.0.1:21503`.
+* Reconhecimento cobre HOME, Coleção, Loja, ofertas diárias, Liga, matchmaking, draft, combate, resultado e vitória, além dos estados de anúncios já documentados.
+* RapidOCR com ONNX Runtime lê regiões específicas e mantém o último retrato confiável em `datasets/account_state.json`.
+* A aba `Recursos` da GUI mostra energia, gemas, moedas, moeda M, troféus, nível, Liga, coleção e unidades visíveis com nível/maestria.
+* Última suíte completa executada: **292 testes aprovados**.
+
+### Sessão real completa `20260813_173817_477`
+
+Sessão de aproximadamente 4min10s: HOME → matchmaking → cinco rounds → vitória → pacote de vitória → Liga. Foram processados 177 frames e salvas 74 imagens seletivas.
+
+Descobertas para o executor:
+
+1. Cada round apresenta três escolhas, intercaladas com `COMBAT`. Não houve fase manual `POSITION_UNITS` nem `LOCK_IN`; o jogo posicionou as unidades automaticamente.
+2. `ROUND_RESULT` é passivo e avança sozinho.
+3. Um round pode começar com `Bônus de recuperação!`, que exige uma escolha adicional antes de `1/3`, `2/3` e `3/3`.
+4. Opções observadas: `+3 Cavaleiro`, `+5 Ganso`, `+3 Cupido`, `+1 Engenheiro`, `Ganso zumbi!`, `Gansos x2`, `Cavaleiro x2`, `Cupido x2`, `Cavaleiros UP!` e `Cupido UP!`.
+5. Número laranja representa nível da unidade; estrela azul representa maestria. O parser futuro deve produzir `slot`, `unit`, `effect`, `quantity`, `level`, `mastery`, `confidence` e `available`.
+6. Slots podem aparecer vazios; nunca assumir que as três cartas estão disponíveis.
+7. A vitória concedeu 29 troféus (`460 → 489`). A posição da Liga animou de `#6` para `#4`; a leitura correta só estabilizou depois de alguns frames, em `#4 / 108 pontos`.
+
+### Causa dos taps repetidos pós-vitória
+
+`VICTORY_SUMMARY` agrupava três fases visualmente distintas: splash de vitória, distribuição de maestria e pacote de vitória. O executor reagia novamente ao mesmo estado amplo antes de confirmar a mudança visual. A implementação futura deve usar subestados e pós-condições:
+
+* `VICTORY_SPLASH`: um tap; esperar painel de maestria/pacote.
+* `MASTERY_DISTRIBUTION`: um tap; esperar pacote.
+* `VICTORY_PACKAGE_READY`: tocar `Continuar` somente com botão visível.
+* `VICTORY_PACKAGE_ANIMATING`: nenhum tap; esperar Liga/HOME.
+
+Toda ação deve ser persistida em `actions.jsonl` com ID, decisão, coordenada, frame anterior, frame posterior e resultado. Não executar uma nova ação enquanto a pós-condição da anterior estiver pendente.
+
+### Oferta pós-batalha `20260813_180239_126`
+
+Popup interno `Pack Comandante`, duração `23h59`, preço `R$ 26,99`. O classificador atual retorna `UNKNOWN` com `candidate:HOME/home_battle_button` e cerca de 61,3%, pois a oferta cobre a HOME.
+
+Adicionar o estado `POST_BATTLE_OFFER`. O botão seguro de fechar, na referência 720×1280, foi medido em `bbox=(588,403,56,57)`, centro `(616,432)` e posição normalizada `(0.856,0.337)`. Detectar o X visualmente; a coordenada é apenas validação. Enviar um único tap e confirmar que o X/sombreamento desapareceram e a HOME voltou. Nunca tocar no botão de preço. Essa oferta não é anúncio externo e não usa a recuperação de Google Play/navegador.
+
+### Próxima implementação recomendada
+
+Construir uma FSM de batalha isolada, inicialmente com escolha aleatória entre slots visualmente válidos:
+
+`HOME → WAIT_MATCHMAKING → DRAFT/RECOVERY_BONUS ↔ COMBAT → ROUND_RESULT → VICTORY_* → POST_BATTLE_OFFER? → LEAGUE_MENU? → HOME`
+
+Estados passivos (`WAIT_MATCHMAKING`, `COMBAT`, `ROUND_RESULT` e animações) não enviam taps. Cada estado ativo exige evidência estável, orçamento de ação e pós-condição específica. Gastos, impulsos e anúncios devem permanecer desabilitados na primeira versão.
+
+---
+
+*Fim do documento de handoff atualizado.*
