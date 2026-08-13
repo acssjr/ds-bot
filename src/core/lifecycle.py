@@ -35,6 +35,8 @@ class Lifecycle:
         return self._status
 
     def transition(self, target: RuntimeStatus) -> None:
+        if not isinstance(target, RuntimeStatus):
+            raise TypeError("target must be a RuntimeStatus")
         if target not in _ALLOWED[self._status]:
             raise InvalidLifecycleTransition(f"cannot transition from {self._status} to {target}")
         self._status = target
