@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from src.capture.manager import CaptureManager
+from src.capture.base_capture import CaptureTemporarilyUnavailable
 from src.capture.models import CaptureBackend, CapturedImage
 from src.core.cancellation import CancellationToken
 from src.core.events import EventBus, EventKind
@@ -86,6 +87,33 @@ def test_runtime_processes_one_frame_and_has_no_input_dependency() -> None:
     assert EventKind.INPUT not in kinds
     assert drained[2].payload["frame_id"] == 1
     assert drained[3].payload["frame_id"] == 1
+
+
+def test_transient_capture_failure_does_not_stop_runtime() -> None:
+    class RecoveringSource(OneFrameSource):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def capture(self) -> CapturedImage:
+            self.calls += 1
+            if self.calls == 1:
+                raise CaptureTemporarilyUnavailable(
+                    "temporary black frame", attempts=3, blank_frames=3
+                )
+            return super().capture()
+
+    source = RecoveringSource()
+    runtime, events, lifecycle = build_runtime(
+        source,
+        FakePerception(),
+        settings=RuntimeSettings(0.0, capture_retry_seconds=0.0),
+    )
+
+    assert runtime.run(max_frames=1) == 1
+    assert lifecycle.status is RuntimeStatus.STOPPED
+    capture_events = [event for event in events.drain() if event.kind is EventKind.CAPTURE]
+    assert [event.payload["status"] for event in capture_events] == ["degraded", "recovered"]
 
 
 def test_runtime_stops_capture_and_preserves_failed_status() -> None:

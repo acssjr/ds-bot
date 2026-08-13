@@ -22,6 +22,7 @@ from src.gui.presenter import (
     present_lifecycle,
 )
 from src.runtime.bot_runtime import BotRuntime, RuntimeSettings
+from src.recording.session_recorder import SessionRecorder
 from src.vision.legacy_adapter import LegacyVisionAdapter
 
 
@@ -105,7 +106,8 @@ def run_observer_worker(
                 events=events,
                 lifecycle=Lifecycle(),
                 cancellation=cancellation,
-                settings=RuntimeSettings(0.25),
+                settings=RuntimeSettings(0.15),
+                recorder=SessionRecorder(),
             )
         else:
             runtime = runtime_factory(serial, cancellation, events)
@@ -160,6 +162,7 @@ class DraftShowdownGUI(ctk.CTk):
         self._last_lifecycle_status: str | None = None
         self._last_error_text: str | None = None
         self._reported_dropped_events = 0
+        self._dataset_saved_count = 0
 
         self._build_ui()
         self._setup_logging()
@@ -268,6 +271,12 @@ class DraftShowdownGUI(ctk.CTk):
             font=ctk.CTkFont(size=14, weight="bold"),
         )
         self.lbl_current_state.pack(anchor="w", padx=15, pady=10)
+        self.lbl_capture_state = ctk.CTkLabel(
+            state_frame,
+            text="Captura: aguardando | Pretos descartados: 0 | Dataset: 0 imagens",
+            text_color="#A9B7C6",
+        )
+        self.lbl_capture_state.pack(anchor="w", padx=15, pady=(0, 10))
 
         ctk.CTkLabel(
             self.tab_observation,
@@ -389,6 +398,7 @@ class DraftShowdownGUI(ctk.CTk):
         self._last_lifecycle_status = None
         self._last_error_text = None
         self._reported_dropped_events = 0
+        self._dataset_saved_count = 0
         self.is_running = True
 
         self.status_badge.configure(text="🟠 INICIANDO", fg_color="#E65100")
@@ -461,6 +471,43 @@ class DraftShowdownGUI(ctk.CTk):
         observation = format_runtime_event(event)
         if observation is not None:
             self.lbl_current_state.configure(text=observation)
+            return
+
+        if event.kind is EventKind.FRAME:
+            self.lbl_capture_state.configure(
+                text=(
+                    f"Captura: {event.payload.get('capture_strategy', '-')} | "
+                    f"Válidos: {event.payload.get('valid_frames', 0)} | "
+                    f"Pretos descartados: {event.payload.get('blank_frames', 0)} | "
+                    f"Dataset: {self._dataset_saved_count} imagens"
+                ),
+                text_color="#A9B7C6",
+            )
+            return
+
+        if event.kind is EventKind.CAPTURE:
+            degraded = event.payload.get("status") == "degraded"
+            self.lbl_capture_state.configure(
+                text=(
+                    f"Captura: {'instável, tentando novamente' if degraded else 'recuperada'} | "
+                    f"Válidos: {event.payload.get('valid_frames', 0)} | "
+                    f"Pretos descartados: {event.payload.get('blank_frames', 0)} | "
+                    f"Dataset: {self._dataset_saved_count} imagens"
+                ),
+                text_color="#FFB74D" if degraded else "#81C784",
+            )
+            return
+
+        if event.kind is EventKind.DATASET:
+            if event.payload.get("status") == "saved":
+                self._dataset_saved_count = int(event.payload.get("saved_count", 0))
+                logger.info(
+                    "Dataset: frame útil {} salvo ({})",
+                    self._dataset_saved_count,
+                    event.payload.get("reason", "seleção automática"),
+                )
+            elif event.payload.get("error"):
+                logger.warning("Gravação de dataset desabilitada: {}", event.payload["error"])
             return
 
         lifecycle = present_lifecycle(event)

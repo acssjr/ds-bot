@@ -53,6 +53,10 @@ class CaptureManager:
         self._last_frame = None
         return self._capture_generation
 
+    @property
+    def health(self):
+        return getattr(self._source, "health", None)
+
     def next_frame(self, request: CaptureRequest) -> Frame:
         if not self._started:
             raise RuntimeError("capture manager is not started")

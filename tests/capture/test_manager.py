@@ -6,6 +6,7 @@ import pytest
 from PIL import Image
 
 from src.capture.adb_source import ADBCaptureSource
+from src.capture.base_capture import CaptureTemporarilyUnavailable
 from src.capture.manager import CaptureManager
 from src.capture.models import CaptureBackend, CaptureRequest, CapturedImage, Frame
 from src.capture.replay import ReplayCaptureSource, ReplayExhausted
@@ -189,7 +190,22 @@ def test_adb_source_rejects_consecutive_blank_memu_frames() -> None:
     )
     source.start()
 
-    with pytest.raises(RuntimeError, match="2 consecutive blank frames"):
+    with pytest.raises(CaptureTemporarilyUnavailable, match="2 consecutive blank frames"):
+        source.capture()
+
+
+def test_adb_source_rejects_nearly_black_memu_frame_with_pixel_sparkles() -> None:
+    almost_black = np.zeros((200, 200, 3), dtype=np.uint8)
+    almost_black[0, 0] = (255, 180, 20)
+    source = ADBCaptureSource(
+        FakeSession(almost_black),
+        clock=lambda: 3.0,
+        max_capture_attempts=1,
+        retry_delay_seconds=0,
+    )
+    source.start()
+
+    with pytest.raises(CaptureTemporarilyUnavailable):
         source.capture()
 
 

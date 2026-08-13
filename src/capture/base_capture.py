@@ -6,6 +6,15 @@ import numpy as np
 from src.capture.models import CapturedImage
 
 
+class CaptureTemporarilyUnavailable(RuntimeError):
+    """No useful frame is available yet, but the capture session remains usable."""
+
+    def __init__(self, message: str, *, attempts: int, blank_frames: int) -> None:
+        super().__init__(message)
+        self.attempts = attempts
+        self.blank_frames = blank_frames
+
+
 class CaptureSource(Protocol):
     def start(self) -> None: ...
 

@@ -15,6 +15,7 @@ htmlcov/
 .artifacts/
 artifacts/
 logs/
+datasets/
 *.log
 
 # Local worktrees

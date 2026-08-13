@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import math
+import subprocess
 from io import BytesIO
 from numbers import Real
 from typing import Any
 
 import adbutils
+from adbutils._utils import adb_path
 from PIL import Image
 
 
@@ -113,6 +115,32 @@ class DeviceSession:
             raise
         except Exception as exc:
             raise DeviceSessionError(f"ADB operation 'screencap' failed for {self._serial!r}") from exc
+
+    def screencap_exec_out_png(self) -> Image.Image:
+        """Capture through native ``adb exec-out`` (more reliable on MEmu)."""
+        self._require_device()
+        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            result = subprocess.run(
+                [adb_path(), "-s", self._serial, "exec-out", "screencap", "-p"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=self._timeout_seconds,
+                check=False,
+                creationflags=creation_flags,
+            )
+            if result.returncode != 0:
+                detail = result.stderr.decode("utf-8", errors="replace").strip()
+                raise RuntimeError(detail or f"adb exited with {result.returncode}")
+            image = Image.open(BytesIO(result.stdout))
+            image.load()
+            return image
+        except DeviceNotConnected:
+            raise
+        except Exception as exc:
+            raise DeviceSessionError(
+                f"ADB operation 'exec-out screencap' failed for {self._serial!r}"
+            ) from exc
 
     def click(self, x: int, y: int) -> None:
         self._invoke("click", "click", x, y)

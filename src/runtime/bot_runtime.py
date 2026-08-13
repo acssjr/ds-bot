@@ -9,8 +9,9 @@ from numbers import Real
 from threading import Lock
 from typing import Any, Protocol
 
+from src.capture.base_capture import CaptureTemporarilyUnavailable
 from src.capture.manager import CaptureManager
-from src.capture.models import CaptureRequest
+from src.capture.models import CaptureRequest, Frame
 from src.core.cancellation import Cancelled, CancellationToken
 from src.core.events import EventKind, EventSink, RuntimeEvent
 from src.core.lifecycle import Lifecycle, RuntimeStatus
@@ -20,18 +21,28 @@ class Perception(Protocol):
     def analyze(self, image: Any, *, cancellation: CancellationToken | None = None) -> Mapping[str, Any]: ...
 
 
+class FrameRecorder(Protocol):
+    def record(self, frame: Frame, observation: Mapping[str, Any]) -> Any: ...
+
+    def close(self) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeSettings:
     poll_interval_seconds: float = 0.25
+    capture_retry_seconds: float = 0.5
 
     def __post_init__(self) -> None:
-        value = self.poll_interval_seconds
-        if isinstance(value, bool) or not isinstance(value, Real):
-            raise TypeError("poll interval must be a real number")
-        if not math.isfinite(value):
-            raise ValueError("poll interval must be finite")
-        if value < 0:
-            raise ValueError("poll interval must be non-negative")
+        for name, value in (
+            ("poll interval", self.poll_interval_seconds),
+            ("capture retry", self.capture_retry_seconds),
+        ):
+            if isinstance(value, bool) or not isinstance(value, Real):
+                raise TypeError(f"{name} must be a real number")
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
+            if value < 0:
+                raise ValueError(f"{name} must be non-negative")
 
 
 class BotRuntime:
@@ -44,6 +55,7 @@ class BotRuntime:
         lifecycle: Lifecycle,
         cancellation: CancellationToken,
         settings: RuntimeSettings,
+        recorder: FrameRecorder | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._capture = capture
@@ -52,6 +64,8 @@ class BotRuntime:
         self._lifecycle = lifecycle
         self._cancellation = cancellation
         self._settings = settings
+        self._recorder = recorder
+        self._recorder_failed = False
         self._clock = clock
         self._used = False
         self._used_lock = Lock()
@@ -114,6 +128,48 @@ class BotRuntime:
         except Exception as transition_error:
             primary_error.add_note(f"failed-state transition also failed: {transition_error!r}")
 
+    def _capture_health_payload(self) -> dict[str, Any]:
+        health = self._capture.health
+        if health is None:
+            return {}
+        return {
+            "capture_attempts": int(health.attempts),
+            "valid_frames": int(health.valid_frames),
+            "blank_frames": int(health.blank_frames),
+            "capture_errors": int(health.operation_errors),
+            "capture_failures": int(health.transient_failures),
+            "capture_recoveries": int(health.recoveries),
+            "capture_strategy": str(health.last_strategy),
+        }
+
+    def _record_frame(self, frame: Frame, observation: Mapping[str, Any]) -> None:
+        if self._recorder is None or self._recorder_failed:
+            return
+        try:
+            result = self._recorder.record(frame, observation)
+            if not getattr(result, "saved", False):
+                return
+            self._publish(
+                self._event(
+                    EventKind.DATASET,
+                    {
+                        "status": "saved",
+                        "saved_count": int(result.saved_count),
+                        "reason": str(result.reason),
+                        "path": result.relative_path,
+                        "session_directory": str(result.session_directory),
+                    },
+                )
+            )
+        except Exception as exc:
+            self._recorder_failed = True
+            event = self._control_event(
+                EventKind.DATASET,
+                {"status": "disabled", "error": repr(exc)},
+            )
+            if event is not None:
+                self._publish(event)
+
     @staticmethod
     def _validate_max_frames(max_frames: int | None) -> None:
         if max_frames is None:
@@ -135,6 +191,7 @@ class BotRuntime:
         processed = 0
         primary_error: BaseException | None = None
         cleanup_required = False
+        capture_degraded = False
 
         try:
             cleanup_required = True
@@ -146,8 +203,30 @@ class BotRuntime:
 
             while max_frames is None or processed < max_frames:
                 self._cancellation.raise_if_cancelled()
-                frame = self._capture.next_frame(CaptureRequest.fresh_required())
+                try:
+                    frame = self._capture.next_frame(CaptureRequest.fresh_required())
+                except CaptureTemporarilyUnavailable as exc:
+                    capture_degraded = True
+                    self._publish(
+                        self._event(
+                            EventKind.CAPTURE,
+                            {
+                                "status": "degraded",
+                                "attempts": exc.attempts,
+                                "blank_frames_in_cycle": exc.blank_frames,
+                                **self._capture_health_payload(),
+                            },
+                        )
+                    )
+                    self._cancellation.wait(self._settings.capture_retry_seconds)
+                    continue
                 self._cancellation.raise_if_cancelled()
+                health_payload = self._capture_health_payload()
+                if capture_degraded:
+                    capture_degraded = False
+                    self._publish(
+                        self._event(EventKind.CAPTURE, {"status": "recovered", **health_payload})
+                    )
                 self._publish(
                     self._event(
                         EventKind.FRAME,
@@ -159,6 +238,7 @@ class BotRuntime:
                             "device_serial": frame.device_serial,
                             "connection_generation": frame.connection_generation,
                             "capture_generation": frame.capture_generation,
+                            **health_payload,
                         },
                     )
                 )
@@ -173,6 +253,7 @@ class BotRuntime:
                 observation["frame_id"] = frame.id
                 self._cancellation.raise_if_cancelled()
                 self._publish(self._event(EventKind.OBSERVATION, observation))
+                self._record_frame(frame, observation)
                 processed += 1
                 if max_frames is None or processed < max_frames:
                     self._cancellation.raise_if_cancelled()
@@ -209,6 +290,17 @@ class BotRuntime:
                                 self._publish_error(primary_error, phase="cleanup")
                             except BaseException as telemetry_error:
                                 primary_error.add_note(f"cleanup telemetry also failed: {telemetry_error!r}")
+
+                if self._recorder is not None:
+                    try:
+                        self._recorder.close()
+                    except BaseException as recorder_error:
+                        event = self._control_event(
+                            EventKind.DATASET,
+                            {"status": "close-error", "error": repr(recorder_error)},
+                        )
+                        if event is not None:
+                            self._publish(event)
 
                 if primary_error is not None and self._lifecycle.status is not RuntimeStatus.FAILED:
                     try:

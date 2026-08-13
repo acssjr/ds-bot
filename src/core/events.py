@@ -15,6 +15,8 @@ class EventKind(str, Enum):
     LIFECYCLE = "lifecycle"
     FRAME = "frame"
     OBSERVATION = "observation"
+    CAPTURE = "capture"
+    DATASET = "dataset"
     INPUT = "input"
     ERROR = "error"
 

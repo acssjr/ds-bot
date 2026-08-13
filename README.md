@@ -7,6 +7,8 @@ Fundação para automação visual confiável de **uma conta do Draft Showdown e
 Esta versão é estritamente **SOMENTE OBSERVAÇÃO**. A CLI e a GUI usam o mesmo `BotRuntime` para capturar frames e publicar observações. O runtime atual:
 
 - captura automaticamente a tela nativa do Android via ADB, ou reproduz imagens gravadas;
+- alterna entre `adb exec-out` e captura shell quando o MEmu devolve frames pretos transitórios, sem encerrar a observação;
+- na GUI, grava automaticamente um dataset seletivo em `datasets/sessions/`, priorizando transições, `UNKNOWN`, mudanças visuais e amostras periódicas;
 - processa apenas a instância MEmu selecionada explicitamente;
 - não cria controladores de entrada e **não envia taps, swipes ou outros comandos ao jogo**;
 - encerra de forma cooperativa e registra eventos de ciclo de vida, frame, observação e erro.
@@ -73,11 +75,11 @@ Não há seleção implícita do primeiro emulador. Em modo ao vivo, `--frames` 
 .\.venv312\Scripts\python.exe -m src.gui.app
 ```
 
-A GUI descobre os dispositivos fora da thread do Tk, exige a escolha explícita de um serial e executa a mesma fundação `BotRuntime` em uma thread de trabalho. Eventos são consumidos pela thread da interface. A descoberta e a sessão ADB da GUI usam timeout de inatividade de 5 segundos. Pausa e automação ativa permanecem desabilitadas.
+A GUI descobre os dispositivos fora da thread do Tk, exige a escolha explícita de um serial e executa a mesma fundação `BotRuntime` em uma thread de trabalho. Eventos são consumidos pela thread da interface. A descoberta e a sessão ADB da GUI usam timeout de inatividade de 5 segundos. O painel mostra frames válidos, pretos descartados, estratégia de captura e imagens salvas. Os arquivos JPEG e o `observations.jsonl` ficam numa pasta de sessão em `datasets/sessions/`; frames repetidos são deduplicados para limitar uso de disco. Pausa e automação ativa permanecem desabilitadas.
 
 ## Limitações conhecidas
 
-- a classificação atual usa o pipeline legado e templates ainda incompletos e não calibrados;
+- `HOME` possui um template verificado em captura ADB real; as demais telas ainda usam cobertura incompleta;
 - capturas reais podem permanecer em `UNKNOWN`, o que é esperado nesta fundação;
 - não há ainda OCR especializado, detector de cartas validado, decisão de draft, execução de ações, verificação de pós-condição ou recuperação automática;
 - replay demonstra determinismo e segurança estrutural, mas não substitui a validação controlada de captura ao vivo no MEmu.

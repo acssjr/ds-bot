@@ -2,13 +2,26 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
 from loguru import logger
 
+from src.capture.base_capture import CaptureTemporarilyUnavailable
 from src.capture.models import CaptureBackend, CapturedImage
 from src.device.session import DeviceSession
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureHealth:
+    attempts: int
+    valid_frames: int
+    blank_frames: int
+    operation_errors: int
+    transient_failures: int
+    recoveries: int
+    last_strategy: str
 
 
 class ADBCaptureSource:
@@ -17,7 +30,7 @@ class ADBCaptureSource:
         session: DeviceSession,
         *,
         clock: Callable[[], float] = time.monotonic,
-        max_capture_attempts: int = 8,
+        max_capture_attempts: int = 3,
         retry_delay_seconds: float = 0.08,
         sleeper: Callable[[float], None] = time.sleep,
     ):
@@ -31,6 +44,26 @@ class ADBCaptureSource:
         self._retry_delay_seconds = retry_delay_seconds
         self._sleeper = sleeper
         self._started = False
+        self._attempts = 0
+        self._valid_frames = 0
+        self._blank_frames = 0
+        self._operation_errors = 0
+        self._transient_failures = 0
+        self._recoveries = 0
+        self._last_strategy = "-"
+        self._degraded = False
+
+    @property
+    def health(self) -> CaptureHealth:
+        return CaptureHealth(
+            attempts=self._attempts,
+            valid_frames=self._valid_frames,
+            blank_frames=self._blank_frames,
+            operation_errors=self._operation_errors,
+            transient_failures=self._transient_failures,
+            recoveries=self._recoveries,
+            last_strategy=self._last_strategy,
+        )
 
     def start(self) -> None:
         if self._started:
@@ -43,44 +76,70 @@ class ADBCaptureSource:
         if not self._started:
             raise RuntimeError("ADB capture source is not started")
 
+        blank_in_cycle = 0
+        errors_in_cycle = 0
+        strategies = []
+        exec_out = getattr(self._session, "screencap_exec_out_png", None)
+        if callable(exec_out):
+            strategies.append(("exec-out", exec_out))
+        strategies.append(("shell", self._session.screencap_png))
+
         for attempt in range(1, self._max_capture_attempts + 1):
-            captured_at_monotonic = self._clock()
-            rgb = np.asarray(self._session.screencap_png())
-            if rgb.ndim != 3 or rgb.shape[2] not in (3, 4):
-                raise ValueError(f"unexpected screenshot shape: {rgb.shape!r}")
+            for strategy, capture_image in strategies:
+                captured_at_monotonic = self._clock()
+                self._attempts += 1
+                try:
+                    rgb = np.asarray(capture_image())
+                except Exception:
+                    errors_in_cycle += 1
+                    self._operation_errors += 1
+                    continue
+                if rgb.ndim != 3 or rgb.shape[2] not in (3, 4):
+                    raise ValueError(f"unexpected screenshot shape: {rgb.shape!r}")
 
-            visible_rgb = rgb[:, :, :3]
-            if not self._is_blank_capture(visible_rgb):
-                conversion = (
-                    cv2.COLOR_RGBA2BGR
-                    if rgb.shape[2] == 4
-                    else cv2.COLOR_RGB2BGR
-                )
-                bgr = cv2.cvtColor(rgb, conversion)
-                return CapturedImage(
-                    bgr,
-                    captured_at_monotonic,
-                    CaptureBackend.ADB_PNG,
-                )
+                visible_rgb = rgb[:, :, :3]
+                if not self._is_blank_capture(visible_rgb):
+                    conversion = cv2.COLOR_RGBA2BGR if rgb.shape[2] == 4 else cv2.COLOR_RGB2BGR
+                    bgr = cv2.cvtColor(rgb, conversion)
+                    self._valid_frames += 1
+                    self._last_strategy = strategy
+                    if self._degraded:
+                        self._recoveries += 1
+                        logger.info(
+                            "ADB capture recovered using {}; {} blank frame(s) skipped",
+                            strategy,
+                            blank_in_cycle,
+                        )
+                    self._degraded = False
+                    return CapturedImage(bgr, captured_at_monotonic, CaptureBackend.ADB_PNG)
 
-            logger.warning(
-                "ADB returned a blank frame ({}/{}); retrying capture",
-                attempt,
-                self._max_capture_attempts,
-            )
+                blank_in_cycle += 1
+                self._blank_frames += 1
             if attempt < self._max_capture_attempts:
                 self._sleeper(self._retry_delay_seconds)
 
-        raise RuntimeError(
-            f"ADB returned {self._max_capture_attempts} consecutive blank frames"
+        self._transient_failures += 1
+        self._degraded = True
+        logger.warning(
+            "ADB capture temporarily unavailable: {} blank result(s), {} operation error(s); observation will keep retrying",
+            blank_in_cycle,
+            errors_in_cycle,
+        )
+        raise CaptureTemporarilyUnavailable(
+            f"ADB returned {blank_in_cycle} consecutive blank frames",
+            attempts=len(strategies) * self._max_capture_attempts,
+            blank_frames=blank_in_cycle,
         )
 
     @staticmethod
     def _is_blank_capture(rgb: np.ndarray) -> bool:
         # MEmu can intermittently return a valid all-black PNG from screencap.
-        # Such a frame contains no usable visual information and must never be
-        # forwarded to perception as a real game state.
-        return bool(rgb.max() <= 8 and rgb.std() <= 0.25)
+        # Some faulty frames contain a handful of colored pixels at the top, so
+        # checking only the maximum value is insufficient.
+        if rgb.max() <= 8 and rgb.std() <= 0.25:
+            return True
+        visible_ratio = float(np.mean(np.max(rgb, axis=2) > 12))
+        return bool(rgb.mean() <= 1.0 and visible_ratio < 0.002)
 
     def stop(self) -> None:
         self._started = False
