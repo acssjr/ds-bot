@@ -40,6 +40,7 @@ def test_setuptools_explicitly_discovers_src_namespace_packages() -> None:
         "namespaces": True,
     }
     assert metadata["tool"]["setuptools"]["package-data"]["assets"] == [
+        "templates/*.json",
         "templates/*.png",
         "templates/*.jpg",
         "templates/*.jpeg",

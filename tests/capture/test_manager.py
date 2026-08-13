@@ -145,6 +145,54 @@ def test_adb_source_rejects_grayscale_screenshot() -> None:
         source.capture()
 
 
+def test_adb_source_retries_intermittent_blank_memu_frames() -> None:
+    class IntermittentSession:
+        connected = True
+        connection_generation = 1
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def screencap_png(self):
+            self.calls += 1
+            if self.calls < 3:
+                return Image.fromarray(np.zeros((2, 2, 3), dtype=np.uint8))
+            return Image.fromarray(
+                np.array([[[255, 0, 0], [0, 255, 0]]], dtype=np.uint8)
+            )
+
+    session = IntermittentSession()
+    delays: list[float] = []
+    source = ADBCaptureSource(
+        session,
+        clock=lambda: 3.0,
+        max_capture_attempts=3,
+        retry_delay_seconds=0.01,
+        sleeper=delays.append,
+    )
+    source.start()
+
+    captured = source.capture()
+
+    assert session.calls == 3
+    assert delays == [0.01, 0.01]
+    assert captured.image.max() == 255
+
+
+def test_adb_source_rejects_consecutive_blank_memu_frames() -> None:
+    source = ADBCaptureSource(
+        FakeSession(np.zeros((2, 2, 3), dtype=np.uint8)),
+        clock=lambda: 3.0,
+        max_capture_attempts=2,
+        retry_delay_seconds=0,
+        sleeper=lambda _delay: None,
+    )
+    source.start()
+
+    with pytest.raises(RuntimeError, match="2 consecutive blank frames"):
+        source.capture()
+
+
 def test_manager_reuses_only_a_fresh_frame_from_current_generation() -> None:
     clock = FakeClock()
     source = FakeSource(clock)
