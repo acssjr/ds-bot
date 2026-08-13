@@ -59,11 +59,21 @@ class ContextAnalyzer:
         sub_element: str | None,
     ) -> dict[str, Any]:
         if screen is ScreenState.SHOP_DAILY_OFFERS:
+            free_ad_offers = self._count_matches(frame, self._free_ad_button, 0.72)
+            refresh_ad_visible = self._best_score(frame, self._daily_refresh_button) >= 0.80
+            countdown_visible = self._best_score(frame, self._daily_refresh_label) >= 0.78
             return {
                 "context": "daily_offers",
-                "free_ad_offers_visible": self._count_matches(frame, self._free_ad_button, 0.72),
-                "daily_refresh_ad_visible": self._best_score(frame, self._daily_refresh_button) >= 0.80,
-                "next_refresh_countdown_visible": self._best_score(frame, self._daily_refresh_label) >= 0.78,
+                "free_ad_offers_visible": free_ad_offers,
+                "ad_reward_available_now": free_ad_offers > 0,
+                "daily_refresh_ad_visible": refresh_ad_visible,
+                "daily_refresh_available_now": refresh_ad_visible,
+                "next_refresh_countdown_visible": countdown_visible,
+                "next_reward_status": (
+                    "AVAILABLE_NOW"
+                    if free_ad_offers > 0
+                    else "COOLDOWN_VISIBLE" if countdown_visible else "NOT_VISIBLE"
+                ),
                 "next_refresh_text": "OCR_PENDING",
             }
         if screen is ScreenState.SHOP_MENU:

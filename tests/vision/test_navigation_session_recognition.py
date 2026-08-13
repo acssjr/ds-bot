@@ -61,6 +61,9 @@ def test_daily_offers_expose_only_visible_availability_facts() -> None:
 
     assert result["screen"] is ScreenState.SHOP_DAILY_OFFERS
     assert result["free_ad_offers_visible"] == 2
+    assert result["ad_reward_available_now"] is True
+    assert result["next_reward_status"] == "AVAILABLE_NOW"
     assert result["daily_refresh_ad_visible"] is True
+    assert result["daily_refresh_available_now"] is True
     assert result["next_refresh_countdown_visible"] is True
     assert result["next_refresh_text"] == "OCR_PENDING"

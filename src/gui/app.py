@@ -631,13 +631,18 @@ class DraftShowdownGUI(ctk.CTk):
         if context == "daily_offers":
             free_ads = int(event.payload.get("free_ad_offers_visible", 0))
             refresh_ad = "sim" if event.payload.get("daily_refresh_ad_visible") else "não visível"
+            reward_status = (
+                "DISPONÍVEL AGORA"
+                if event.payload.get("ad_reward_available_now")
+                else "em recarga/sem botão disponível"
+            )
             countdown = (
                 "visível; leitura numérica pendente"
                 if event.payload.get("next_refresh_countdown_visible")
                 else "fora do enquadramento"
             )
             text = (
-                f"Ofertas diárias: {free_ads} botão(ões) por anúncio | "
+                f"Recompensa por anúncio: {reward_status} ({free_ads} visível(is)) | "
                 f"Atualização por anúncio: {refresh_ad} | Próxima renovação: {countdown}"
             )
         elif context == "shop":
