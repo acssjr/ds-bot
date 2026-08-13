@@ -1,75 +1,158 @@
-import sys
-import time
-import threading
+from __future__ import annotations
+
 import queue
+import threading
+import time
+from dataclasses import dataclass
+
 import adbutils
 import customtkinter as ctk
 from loguru import logger
-from typing import Optional
 
-from src.utils.watchdog import Watchdog
-from src.capture.adb_capture import ADBCapture
-from src.vision.pipeline import VisionPipeline
-from src.state.state_manager import StateManager
-from src.state.game_state import ScreenState, SessionStats
-from src.strategy.draft_evaluator import DraftEvaluator
-from src.actions.action_planner import ActionPlanner
-from src.controllers.adb_controller import ADBController
+from src.capture.adb_source import ADBCaptureSource
+from src.capture.manager import CaptureManager
+from src.core.cancellation import CancellationToken
+from src.core.events import EventBus, EventKind, RuntimeEvent
+from src.core.lifecycle import Lifecycle
+from src.device.session import DeviceSession
+from src.gui.presenter import (
+    format_runtime_error,
+    format_runtime_event,
+    present_lifecycle,
+)
+from src.runtime.bot_runtime import BotRuntime, RuntimeSettings
+from src.vision.legacy_adapter import LegacyVisionAdapter
 
-# Configuração de Aparência do CustomTkinter
-ctk.set_appearance_mode("Dark")
-ctk.set_default_color_theme("blue")
 
-class TextHandler:
-    """Redireciona os logs do Loguru para a janela de texto da GUI."""
-    def __init__(self, log_queue: queue.Queue):
-        self.log_queue = log_queue
+EVENT_POLL_MS = 100
+LOG_POLL_MS = 150
+DISCOVERY_POLL_MS = 100
+ADB_SOCKET_TIMEOUT_SECONDS = 5.0
 
-    def write(self, message):
-        self.log_queue.put(message)
 
-    def flush(self):
-        pass
+@dataclass(frozen=True, slots=True)
+class DeviceDiscoveryResult:
+    serials: tuple[str, ...] = ()
+    error: str | None = None
+
+
+def _put_latest(target: queue.Queue, item: object) -> None:
+    """Put without blocking, discarding the oldest queued item if necessary."""
+    while True:
+        try:
+            target.put_nowait(item)
+            return
+        except queue.Full:
+            try:
+                target.get_nowait()
+            except queue.Empty:
+                continue
+
+
+class BoundedTextSink:
+    """Non-blocking Loguru sink suitable for the Tk polling loop."""
+
+    def __init__(self, target: queue.Queue[str]) -> None:
+        self._target = target
+
+    def write(self, message: object) -> None:
+        _put_latest(self._target, str(message))
+
+
+def discover_adb_serials() -> tuple[str, ...]:
+    """Discover ADB devices with a finite socket timeout, outside the Tk thread."""
+    client = adbutils.AdbClient(socket_timeout=5.0)
+    return tuple(sorted(device.serial for device in client.device_list()))
+
+
+def run_device_discovery(results: queue.Queue[DeviceDiscoveryResult]) -> None:
+    try:
+        result = DeviceDiscoveryResult(serials=discover_adb_serials())
+    except Exception as exc:
+        result = DeviceDiscoveryResult(error=repr(exc))
+    _put_latest(results, result)
+
+
+def run_observer_worker(
+    serial: str,
+    cancellation: CancellationToken,
+    events: EventBus,
+) -> None:
+    """Assemble and run one observe-only session without touching Tk state."""
+    try:
+        session = DeviceSession(serial, timeout_seconds=ADB_SOCKET_TIMEOUT_SECONDS)
+        source = ADBCaptureSource(session)
+        capture = CaptureManager(
+            source,
+            device_serial=session.serial,
+            connection_generation=lambda: session.connection_generation,
+        )
+        runtime = BotRuntime(
+            capture=capture,
+            perception=LegacyVisionAdapter(),
+            events=events,
+            lifecycle=Lifecycle(),
+            cancellation=cancellation,
+            settings=RuntimeSettings(0.25),
+        )
+        logger.warning(
+            "GUI em modo SOMENTE OBSERVAÇÃO; nenhuma ação será enviada."
+        )
+        runtime.run()
+    except Exception as exc:
+        logger.exception("Falha no runtime de observação")
+        events.publish(
+            RuntimeEvent(
+                EventKind.ERROR,
+                time.monotonic(),
+                {"phase": "gui-worker", "error": repr(exc)},
+            )
+        )
+
 
 class DraftShowdownGUI(ctk.CTk):
-    def __init__(self):
+    """Tk adapter for one explicitly selected, observe-only runtime session."""
+
+    def __init__(self) -> None:
         super().__init__()
 
-        self.title("Draft Showdown Bot - Painel de Controle (Inspirado no MyBot.run)")
+        self.title("Draft Showdown — Observação segura")
         self.geometry("980x680")
-        self.minsize(900, 600)
+        self.minsize(860, 560)
 
-        # Estado da Automação
+        self._closing = False
         self.is_running = False
-        self.is_paused = False
-        self.bot_thread: Optional[threading.Thread] = None
-        self.stats = SessionStats()
-        self.log_queue = queue.Queue()
-
-        # Opções de Configuração
-        self.cfg_watch_ads = ctk.BooleanVar(value=True)
-        self.cfg_double_bits = ctk.BooleanVar(value=True)
-        self.cfg_claim_home = ctk.BooleanVar(value=True)
-        self.cfg_mastery_boost = ctk.BooleanVar(value=True)
-        self.cfg_draft_strategy = ctk.StringVar(value="Matriz de Utilidade")
+        self._available_serials: tuple[str, ...] = ()
+        self._runtime_events: EventBus | None = None
+        self._cancellation: CancellationToken | None = None
+        self._bot_thread: threading.Thread | None = None
+        self._discovery_thread: threading.Thread | None = None
+        self._discovery_results: queue.Queue[DeviceDiscoveryResult] = queue.Queue(
+            maxsize=1
+        )
+        self._log_queue: queue.Queue[str] = queue.Queue(maxsize=500)
+        self._log_sink_id: int | None = None
+        self._last_lifecycle_key: tuple[float, str] | None = None
+        self._last_error_text: str | None = None
+        self._reported_dropped_events = 0
 
         self._build_ui()
         self._setup_logging()
-        self._refresh_device_list()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        # Loop de atualização da GUI
-        self.after(200, self._process_log_queue)
-        self.after(1000, self._update_stats_ui)
+        self.after(EVENT_POLL_MS, self._process_runtime_events)
+        self.after(LOG_POLL_MS, self._process_log_queue)
+        self.after(DISCOVERY_POLL_MS, self._process_discovery_results)
+        self.refresh_devices()
 
-    def _build_ui(self):
-        # Frame de Cabeçalho / Controle Superior
-        self.header_frame = ctk.CTkFrame(self, height=70, corner_radius=10)
+    def _build_ui(self) -> None:
+        self.header_frame = ctk.CTkFrame(self, height=72, corner_radius=10)
         self.header_frame.pack(fill="x", padx=15, pady=10)
 
         self.lbl_title = ctk.CTkLabel(
             self.header_frame,
-            text="⚔️ DRAFT SHOWDOWN BOT",
-            font=ctk.CTkFont(size=20, weight="bold")
+            text="DRAFT SHOWDOWN · OBSERVAÇÃO",
+            font=ctk.CTkFont(size=19, weight="bold"),
         )
         self.lbl_title.pack(side="left", padx=15)
 
@@ -79,329 +162,339 @@ class DraftShowdownGUI(ctk.CTk):
             fg_color="#A91B0D",
             text_color="white",
             corner_radius=8,
-            width=100,
+            width=118,
             height=30,
-            font=ctk.CTkFont(size=13, weight="bold")
+            font=ctk.CTkFont(size=13, weight="bold"),
         )
-        self.status_badge.pack(side="left", padx=10)
+        self.status_badge.pack(side="left", padx=8)
 
-        # Botões de Ação Principais
         self.btn_start = ctk.CTkButton(
             self.header_frame,
-            text="▶ Iniciar Bot",
+            text="▶ Iniciar observação",
             fg_color="#2E7D32",
             hover_color="#1B5E20",
-            width=110,
-            command=self.start_bot
+            width=150,
+            state="disabled",
+            command=self.start_observation,
         )
         self.btn_start.pack(side="left", padx=5)
 
         self.btn_pause = ctk.CTkButton(
             self.header_frame,
-            text="⏸ Pausar",
-            fg_color="#E65100",
-            hover_color="#EF6C00",
-            width=90,
+            text="Pausa indisponível",
+            width=125,
             state="disabled",
-            command=self.toggle_pause
         )
         self.btn_pause.pack(side="left", padx=5)
 
         self.btn_stop = ctk.CTkButton(
             self.header_frame,
-            text="⏹ Parar",
+            text="■ Parar observação",
             fg_color="#C62828",
             hover_color="#B71C1C",
-            width=90,
+            width=135,
             state="disabled",
-            command=self.stop_bot
+            command=self.stop_bot,
         )
         self.btn_stop.pack(side="left", padx=5)
 
-        # Seletor de Emulador / ADB
-        self.device_option = ctk.CTkOptionMenu(
-            self.header_frame,
-            values=["Buscando ADB..."],
-            width=180
+        device_frame = ctk.CTkFrame(self, corner_radius=10)
+        device_frame.pack(fill="x", padx=15, pady=(0, 10))
+
+        ctk.CTkLabel(device_frame, text="Dispositivo ADB explícito:").pack(
+            side="left", padx=(15, 5), pady=10
         )
-        self.device_option.pack(side="right", padx=15)
+        self.device_option = ctk.CTkOptionMenu(
+            device_frame,
+            values=["Buscando dispositivos..."],
+            width=240,
+            command=lambda _value: self._update_controls(),
+        )
+        self.device_option.pack(side="left", padx=5, pady=10)
 
-        self.lbl_device = ctk.CTkLabel(self.header_frame, text="Emulador/ADB:")
-        self.lbl_device.pack(side="right", padx=5)
+        self.btn_refresh = ctk.CTkButton(
+            device_frame,
+            text="Atualizar lista",
+            width=110,
+            command=self.refresh_devices,
+        )
+        self.btn_refresh.pack(side="left", padx=8, pady=10)
 
-        # Abas Principais (Navegação em Tabview)
+        ctk.CTkLabel(
+            device_frame,
+            text="Nenhum toque, gesto ou controle de aplicativo é permitido nesta fase.",
+            text_color="#A9B7C6",
+        ).pack(side="right", padx=15, pady=10)
+
         self.tabview = ctk.CTkTabview(self, corner_radius=10)
         self.tabview.pack(fill="both", expand=True, padx=15, pady=(0, 10))
+        self.tab_observation = self.tabview.add("Observação")
+        self.tab_future = self.tabview.add("Recursos futuros")
 
-        self.tab_dashboard = self.tabview.add("📊 Dashboard & Status")
-        self.tab_config = self.tabview.add("⚙️ Configurações & Ads")
-        self.tab_strategy = self.tabview.add("🧠 Estratégia de Gameplay")
+        self._build_observation_tab()
+        self._build_future_tab()
 
-        self._build_dashboard_tab()
-        self._build_config_tab()
-        self._build_strategy_tab()
-
-    def _build_dashboard_tab(self):
-        # Painel Superior de Cards de Estatísticas
-        self.stats_frame = ctk.CTkFrame(self.tab_dashboard, fg_color="transparent")
-        self.stats_frame.pack(fill="x", pady=5)
-
-        self.card_battles = self._create_stat_card(self.stats_frame, "Partidas", "0")
-        self.card_winrate = self._create_stat_card(self.stats_frame, "Vitórias / Derrotas", "0V / 0D (0%)")
-        self.card_ads = self._create_stat_card(self.stats_frame, "Anúncios Assistidos", "0")
-        self.card_uptime = self._create_stat_card(self.stats_frame, "Tempo Rodando", "00:00:00")
-
-        # Estado da Tela Atual
-        self.state_info_frame = ctk.CTkFrame(self.tab_dashboard, height=40)
-        self.state_info_frame.pack(fill="x", pady=5)
-
+    def _build_observation_tab(self) -> None:
+        state_frame = ctk.CTkFrame(self.tab_observation)
+        state_frame.pack(fill="x", padx=8, pady=8)
         self.lbl_current_state = ctk.CTkLabel(
-            self.state_info_frame,
-            text="Tela Detectada: UNKNOWN (Confiança: 0%)",
-            font=ctk.CTkFont(size=14, weight="bold")
+            state_frame,
+            text="Tela: UNKNOWN | Confiança: 0% | Elemento: - | Frame: -",
+            font=ctk.CTkFont(size=14, weight="bold"),
         )
-        self.lbl_current_state.pack(side="left", padx=15, pady=5)
+        self.lbl_current_state.pack(anchor="w", padx=15, pady=10)
 
-        # Console de Logs em Tempo Real
-        self.lbl_log_title = ctk.CTkLabel(self.tab_dashboard, text="Console de Logs em Tempo Real:")
-        self.lbl_log_title.pack(anchor="w", padx=5, pady=(5, 0))
-
-        self.log_textbox = ctk.CTkTextbox(self.tab_dashboard, font=ctk.CTkFont(family="Consolas", size=12))
-        self.log_textbox.pack(fill="both", expand=True, pady=5)
-
-    def _create_stat_card(self, parent, title: str, default_val: str):
-        card = ctk.CTkFrame(parent, width=210, height=70)
-        card.pack(side="left", expand=True, fill="both", padx=5)
-
-        lbl_t = ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=11), text_color="gray")
-        lbl_t.pack(anchor="w", padx=10, pady=(5, 0))
-
-        lbl_v = ctk.CTkLabel(card, text=default_val, font=ctk.CTkFont(size=16, weight="bold"))
-        lbl_v.pack(anchor="w", padx=10, pady=(0, 5))
-
-        return lbl_v
-
-    def _build_config_tab(self):
-        frame = ctk.CTkFrame(self.tab_config)
-        frame.pack(fill="both", expand=True, padx=10, pady=10)
-
-        lbl_sec = ctk.CTkLabel(frame, text="Automação de Anúncios e Recompensas", font=ctk.CTkFont(size=16, weight="bold"))
-        lbl_sec.pack(anchor="w", padx=15, pady=15)
-
-        sw1 = ctk.CTkSwitch(frame, text="Assistir Anúncios de Vitória para Pacote Bônus", variable=self.cfg_watch_ads)
-        sw1.pack(anchor="w", padx=20, pady=10)
-
-        sw2 = ctk.CTkSwitch(frame, text="Assistir Anúncios para Duplicar Bits (🎬 x2 BITS)", variable=self.cfg_double_bits)
-        sw2.pack(anchor="w", padx=20, pady=10)
-
-        sw3 = ctk.CTkSwitch(frame, text="Resgatar Recompensas de Bits/Packs da Tela Inicial (Home)", variable=self.cfg_claim_home)
-        sw3.pack(anchor="w", padx=20, pady=10)
-
-        sw4 = ctk.CTkSwitch(frame, text="Avançar Impulso de Maestria Pós-Vitória", variable=self.cfg_mastery_boost)
-        sw4.pack(anchor="w", padx=20, pady=10)
-
-    def _build_strategy_tab(self):
-        frame = ctk.CTkFrame(self.tab_strategy)
-        frame.pack(fill="both", expand=True, padx=10, pady=10)
-
-        lbl_sec = ctk.CTkLabel(frame, text="Modo de Seleção de Cartas (Draft)", font=ctk.CTkFont(size=16, weight="bold"))
-        lbl_sec.pack(anchor="w", padx=15, pady=15)
-
-        opt_strat = ctk.CTkOptionMenu(
-            frame,
-            values=["Matriz de Utilidade (Inteligente)", "Draft Cego (Slot 0)"],
-            variable=self.cfg_draft_strategy,
-            width=260
+        ctk.CTkLabel(
+            self.tab_observation,
+            text="Eventos do runtime (somente leitura)",
+        ).pack(anchor="w", padx=10, pady=(4, 0))
+        self.log_textbox = ctk.CTkTextbox(
+            self.tab_observation,
+            font=ctk.CTkFont(family="Consolas", size=12),
         )
-        opt_strat.pack(anchor="w", padx=20, pady=10)
+        self.log_textbox.pack(fill="both", expand=True, padx=8, pady=8)
 
-        lbl_note = ctk.CTkLabel(
-            frame,
-            text="Nota: A Matriz de Utilidade pontua as cartas por papéis (Tank, DPS, Utility) para montar composições equilibradas.",
-            text_color="gray",
-            wraplength=600,
-            justify="left"
+    def _build_future_tab(self) -> None:
+        panel = ctk.CTkFrame(self.tab_future)
+        panel.pack(fill="both", expand=True, padx=10, pady=10)
+        ctk.CTkLabel(
+            panel,
+            text="AUTOMAÇÃO DESABILITADA",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color="#F9A825",
+        ).pack(anchor="w", padx=18, pady=(18, 8))
+        ctk.CTkLabel(
+            panel,
+            text=(
+                "Estratégia de draft, posicionamento, recompensas e anúncios serão "
+                "habilitados apenas depois das etapas de percepção, verificação de "
+                "pós-condição e recuperação. Nesta fundação a interface apenas "
+                "captura e apresenta observações."
+            ),
+            justify="left",
+            wraplength=760,
+        ).pack(anchor="w", padx=18, pady=8)
+
+    def _setup_logging(self) -> None:
+        sink = BoundedTextSink(self._log_queue)
+        self._log_sink_id = logger.add(
+            sink.write,
+            format="{time:HH:mm:ss} | {level: <7} | {message}\n",
+            level="INFO",
         )
-        lbl_note.pack(anchor="w", padx=20, pady=10)
 
-    def _refresh_device_list(self):
-        try:
-            devices = adbutils.adb.device_list()
-            serials = [d.serial for d in devices] if devices else ["Nenhum dispositivo via ADB"]
-            self.device_option.configure(values=serials)
-            self.device_option.set(serials[0])
-        except Exception:
-            self.device_option.configure(values=["ADB não encontrado"])
-
-    def _setup_logging(self):
-        handler = TextHandler(self.log_queue)
-        logger.add(handler.write, format="{time:HH:mm:ss} | {level: <7} | {message}\n", level="INFO")
-
-    def _process_log_queue(self):
-        while not self.log_queue.empty():
-            msg = self.log_queue.get_nowait()
-            self.log_textbox.insert("end", msg)
-            self.log_textbox.see("end")
-        self.after(200, self._process_log_queue)
-
-    def _update_stats_ui(self):
-        if self.is_running:
-            self.card_battles.configure(text=str(self.stats.total_battles))
-            self.card_winrate.configure(text=f"{self.stats.wins}V / {self.stats.losses}D ({self.stats.win_rate:.1f}%)")
-            self.card_ads.configure(text=str(self.stats.ads_watched))
-            self.card_uptime.configure(text=self.stats.uptime_str)
-        self.after(1000, self._update_stats_ui)
-
-    def start_bot(self):
-        if self.is_running:
+    def refresh_devices(self) -> None:
+        if self._closing:
+            return
+        if self._discovery_thread is not None and self._discovery_thread.is_alive():
+            return
+        if self._worker_is_active():
             return
 
-        self.is_running = True
-        self.is_paused = False
-        self.stats = SessionStats()
-
-        self.status_badge.configure(text="🟢 RODANDO", fg_color="#2E7D32")
+        self._available_serials = ()
+        self.device_option.configure(values=["Buscando dispositivos..."])
+        self.device_option.set("Buscando dispositivos...")
         self.btn_start.configure(state="disabled")
-        self.btn_pause.configure(state="normal", text="⏸ Pausar")
-        self.btn_stop.configure(state="normal")
+        self.btn_refresh.configure(state="disabled")
+        self._discovery_thread = threading.Thread(
+            target=run_device_discovery,
+            args=(self._discovery_results,),
+            daemon=True,
+            name="draft-showdown-adb-discovery",
+        )
+        self._discovery_thread.start()
 
-        serial = self.device_option.get()
-        if serial.startswith("Nenhum") or serial.startswith("ADB"):
-            serial = None
-
-        self.bot_thread = threading.Thread(target=self._run_bot_loop, args=(serial,), daemon=True)
-        self.bot_thread.start()
-
-    def toggle_pause(self):
-        if not self.is_running:
+    def _process_discovery_results(self) -> None:
+        if self._closing:
             return
-        self.is_paused = not self.is_paused
-        if self.is_paused:
-            self.status_badge.configure(text="🟠 PAUSADO", fg_color="#E65100")
-            self.btn_pause.configure(text="▶ Retomar")
-        else:
-            self.status_badge.configure(text="🟢 RODANDO", fg_color="#2E7D32")
-            self.btn_pause.configure(text="⏸ Pausar")
-
-    def stop_bot(self):
-        if not self.is_running:
-            return
-
-        self.is_running = False
-        self.is_paused = False
-
-        self.status_badge.configure(text="🔴 PARADO", fg_color="#A91B0D")
-        self.btn_start.configure(state="normal")
-        self.btn_pause.configure(state="disabled", text="⏸ Pausar")
-        self.btn_stop.configure(state="disabled")
-        logger.info("Bot interrompido pelo usuário via GUI.")
-
-    def _run_bot_loop(self, device_serial: Optional[str]):
-        logger.info(f"Iniciando Bot na thread de segundo plano (Dispositivo: {device_serial or 'Padrão'})...")
-
-        capture_stream = ADBCapture(device_serial=device_serial)
-        if not capture_stream.start():
-            logger.error("Falha ao conectar no emulador. Bot parado.")
-            self.stop_bot()
-            return
-
-        vision_pipeline = VisionPipeline(templates_dir="assets/templates")
-        state_manager = StateManager(persistence_frames=2)
-        draft_evaluator = DraftEvaluator()
-        action_planner = ActionPlanner()
-        controller = ADBController(device_serial=device_serial)
-        watchdog = Watchdog(timeout_seconds=35)
-
         try:
-            while self.is_running:
-                if self.is_paused:
-                    time.sleep(0.5)
-                    continue
+            result = self._discovery_results.get_nowait()
+        except queue.Empty:
+            result = None
 
-                frame = capture_stream.get_latest_frame()
-                if frame is None:
-                    time.sleep(0.1)
-                    continue
+        if result is not None:
+            self._discovery_thread = None
+            if result.error is not None:
+                logger.error("Falha ao buscar dispositivos ADB: {}", result.error)
+                values = ["ADB indisponível"]
+                self._available_serials = ()
+            elif result.serials:
+                values = list(result.serials)
+                self._available_serials = result.serials
+            else:
+                values = ["Nenhum dispositivo ADB"]
+                self._available_serials = ()
+            self.device_option.configure(values=values)
+            self.device_option.set(values[0])
+            self.btn_refresh.configure(state="normal")
+            self._update_controls()
 
-                h, w = frame.shape[:2]
-                controller.update_screen_size(w, h)
+        self.after(DISCOVERY_POLL_MS, self._process_discovery_results)
 
-                perception_data = vision_pipeline.analyze(frame)
-                current_state = state_manager.update(perception_data)
-                watchdog.feed(current_state.screen)
+    def start_observation(self) -> None:
+        if self._closing or self.is_running or self._worker_is_active():
+            return
 
-                # Atualiza display de tela na GUI
-                screen = current_state.screen
-                conf = current_state.confidence * 100.0
-                sub = current_state.sub_element
-                self.lbl_current_state.configure(text=f"Tela Detectada: {screen.value} ({conf:.0f}%) [sub: {sub}]")
+        serial = self.device_option.get().strip()
+        if serial not in self._available_serials:
+            logger.error("Selecione explicitamente um dispositivo ADB disponível.")
+            return
 
-                if watchdog.is_stuck():
-                    logger.warning("Watchdog: Travamento detectado! Reiniciando app...")
-                    controller.recover_app_state()
-                    state_manager.reset()
-                    watchdog.reset()
-                    continue
+        cancellation = CancellationToken()
+        events = EventBus(capacity=512)
+        self._cancellation = cancellation
+        self._runtime_events = events
+        self._last_lifecycle_key = None
+        self._last_error_text = None
+        self._reported_dropped_events = 0
+        self.is_running = True
 
-                # Tomada de Decisão considerando Opções da GUI
-                chosen_action = None
+        self.status_badge.configure(text="🟠 INICIANDO", fg_color="#E65100")
+        self.btn_start.configure(state="disabled")
+        self.btn_pause.configure(state="disabled")
+        self.btn_stop.configure(state="normal")
+        self.btn_refresh.configure(state="disabled")
 
-                if screen == ScreenState.HOME:
-                    has_reiv = (sub == "reiv_home_btn") and self.cfg_claim_home.get()
-                    chosen_action = action_planner.plan_start_match(has_home_reiv=has_reiv)
+        self._bot_thread = threading.Thread(
+            target=run_observer_worker,
+            args=(serial, cancellation, events),
+            daemon=True,
+            name="draft-showdown-observer",
+        )
+        self._bot_thread.start()
 
-                elif screen == ScreenState.DRAFT_SCREEN:
-                    best_slot = draft_evaluator.evaluate_choices(current_state.available_choices)
-                    chosen_action = action_planner.plan_card_selection(slot_index=best_slot)
+    def stop_bot(self) -> None:
+        if not self.is_running or self._cancellation is None:
+            return
+        self._cancellation.cancel()
+        self.status_badge.configure(text="🟠 PARANDO", fg_color="#E65100")
+        self.btn_start.configure(state="disabled")
+        self.btn_pause.configure(state="disabled")
+        self.btn_stop.configure(state="disabled")
+        logger.info("Parada cooperativa solicitada.")
 
-                elif screen == ScreenState.POSITION_UNITS:
-                    chosen_action = action_planner.plan_unit_positioning()
+    def _process_runtime_events(self) -> None:
+        if self._closing:
+            return
 
-                elif screen == ScreenState.VICTORY_SUMMARY:
-                    chosen_action = action_planner.plan_handle_victory_summary(
-                        sub_element=sub,
-                        watch_ads=self.cfg_watch_ads.get()
-                    )
-                    if sub == "reiv_ad_btn" and self.cfg_watch_ads.get():
-                        self.stats.ads_watched += 1
+        events = self._runtime_events
+        if events is not None:
+            for event in events.drain():
+                self._apply_runtime_event(event)
 
-                elif screen == ScreenState.DOUBLE_BITS:
-                    chosen_action = action_planner.plan_handle_double_bits(watch_ads=self.cfg_double_bits.get())
-                    if self.cfg_double_bits.get():
-                        self.stats.ads_watched += 1
+            latest_lifecycle = events.latest_lifecycle
+            if latest_lifecycle is not None:
+                self._apply_runtime_event(latest_lifecycle)
+            latest_error = events.latest_error
+            if latest_error is not None:
+                self._apply_runtime_event(latest_error)
 
-                elif screen == ScreenState.MASTERY_BOOST:
-                    chosen_action = action_planner.plan_handle_mastery_boost()
+            dropped = events.dropped_count
+            if dropped > self._reported_dropped_events:
+                logger.warning(
+                    "Fila de eventos cheia: {} evento(s) de dados descartado(s).",
+                    dropped - self._reported_dropped_events,
+                )
+                self._reported_dropped_events = dropped
 
-                elif screen == ScreenState.BIT_PACK_OPENING:
-                    chosen_action = action_planner.plan_skip_bit_pack()
-                    self.stats.bits_collected += 1
+        self._reap_worker()
+        self.after(EVENT_POLL_MS, self._process_runtime_events)
 
-                elif screen == ScreenState.NEW_UNIT_UNLOCKED:
-                    chosen_action = action_planner.plan_unlock_new_unit()
+    def _apply_runtime_event(self, event: RuntimeEvent) -> None:
+        observation = format_runtime_event(event)
+        if observation is not None:
+            self.lbl_current_state.configure(text=observation)
+            return
 
-                elif screen == ScreenState.WATCHING_AD:
-                    chosen_action = action_planner.plan_close_ad(sub_element=sub)
+        lifecycle = present_lifecycle(event)
+        if lifecycle is not None:
+            status = str(event.payload.get("status"))
+            key = (event.emitted_at_monotonic, status)
+            if key == self._last_lifecycle_key:
+                return
+            self._last_lifecycle_key = key
+            self.status_badge.configure(text=lifecycle.label, fg_color=lifecycle.color)
+            if lifecycle.terminal:
+                self.is_running = False
+                self.btn_stop.configure(state="disabled")
+                self._update_controls()
+            return
 
-                elif screen == ScreenState.COLLECTION_MENU:
-                    chosen_action = action_planner.plan_switch_to_battle_tab()
+        error = format_runtime_error(event)
+        if error is None:
+            return
+        raw_error = str(event.payload.get("error") or "erro desconhecido")
+        if raw_error == self._last_error_text:
+            return
+        self._last_error_text = raw_error
+        logger.error("Runtime de observação: {}", error)
+        self.is_running = False
+        self.status_badge.configure(text="🔴 FALHA", fg_color="#A91B0D")
+        self.btn_stop.configure(state="disabled")
+        self._update_controls()
 
-                elif screen in (ScreenState.WAIT_MATCHMAKING, ScreenState.COMBAT):
-                    time.sleep(0.4)
+    def _worker_is_active(self) -> bool:
+        return self._bot_thread is not None and self._bot_thread.is_alive()
 
-                if chosen_action:
-                    logger.info(f"[{screen.value}] {chosen_action.metadata}")
-                    controller.execute(chosen_action)
-                    time.sleep(chosen_action.post_delay_ms / 1000.0)
+    def _reap_worker(self) -> None:
+        if self._bot_thread is None or self._bot_thread.is_alive():
+            return
+        self._bot_thread = None
+        self._cancellation = None
+        if self.is_running:
+            self.is_running = False
+            self.status_badge.configure(text="🔴 PARADO", fg_color="#A91B0D")
+            self.btn_stop.configure(state="disabled")
+        self._update_controls()
 
-                time.sleep(0.1)
+    def _update_controls(self) -> None:
+        can_start = (
+            not self._closing
+            and not self.is_running
+            and not self._worker_is_active()
+            and self.device_option.get().strip() in self._available_serials
+        )
+        self.btn_start.configure(state="normal" if can_start else "disabled")
+        self.btn_pause.configure(state="disabled")
+        if not self.is_running:
+            self.btn_stop.configure(state="disabled")
+        discovering = (
+            self._discovery_thread is not None and self._discovery_thread.is_alive()
+        )
+        self.btn_refresh.configure(
+            state="disabled" if self.is_running or discovering else "normal"
+        )
 
-        except Exception as e:
-            logger.exception(f"Erro na thread do bot: {e}")
-        finally:
-            capture_stream.stop()
-            logger.info("Thread do bot finalizada.")
+    def _process_log_queue(self) -> None:
+        if self._closing:
+            return
+        for _ in range(200):
+            try:
+                message = self._log_queue.get_nowait()
+            except queue.Empty:
+                break
+            self.log_textbox.insert("end", message)
+        self.log_textbox.see("end")
+        self.after(LOG_POLL_MS, self._process_log_queue)
 
-if __name__ == "__main__":
+    def _on_close(self) -> None:
+        if self._closing:
+            return
+        self._closing = True
+        if self._cancellation is not None:
+            self._cancellation.cancel()
+        if self._log_sink_id is not None:
+            logger.remove(self._log_sink_id)
+            self._log_sink_id = None
+        self.destroy()
+
+
+def main() -> None:
+    ctk.set_appearance_mode("Dark")
+    ctk.set_default_color_theme("blue")
     app = DraftShowdownGUI()
     app.mainloop()
+
+
+if __name__ == "__main__":
+    main()
