@@ -23,12 +23,23 @@ class CaptureManager:
         self._last_frame: Frame | None = None
         self._next_frame_id = 1
         self._capture_generation = 0
+        self._started = False
 
     def start(self) -> None:
+        if self._started:
+            return
         self._source.start()
+        self._last_frame = None
+        self._started = True
 
     def stop(self) -> None:
-        self._source.stop()
+        if not self._started:
+            return
+        try:
+            self._source.stop()
+        finally:
+            self._started = False
+            self._last_frame = None
 
     def invalidate_after_input(self) -> int:
         self._capture_generation += 1
@@ -36,6 +47,8 @@ class CaptureManager:
         return self._capture_generation
 
     def next_frame(self, request: CaptureRequest) -> Frame:
+        if not self._started:
+            raise RuntimeError("capture manager is not started")
         if self._capture_generation < request.minimum_generation:
             raise ValueError("capture generation was not invalidated for requested action")
 

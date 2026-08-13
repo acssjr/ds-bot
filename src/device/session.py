@@ -68,9 +68,9 @@ class DeviceSession:
             raise DeviceNotConnected(f"device {self._serial!r} is not connected")
         return self._device
 
-    def _invoke(self, operation: str, method_name: str, *args):
+    def _invoke(self, operation: str, method_name: str, *args, **kwargs):
         try:
-            return getattr(self._require_device(), method_name)(*args)
+            return getattr(self._require_device(), method_name)(*args, **kwargs)
         except DeviceNotConnected:
             raise
         except Exception as exc:
@@ -79,7 +79,7 @@ class DeviceSession:
             ) from exc
 
     def screenshot(self):
-        return self._invoke("screenshot", "screenshot")
+        return self._invoke("screenshot", "screenshot", error_ok=False)
 
     def click(self, x: int, y: int) -> None:
         self._invoke("click", "click", x, y)

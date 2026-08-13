@@ -16,6 +16,7 @@ class FakeDevice:
         self.shell_commands: list[str] = []
         self.stopped_apps: list[str] = []
         self.started_apps: list[str] = []
+        self.screenshot_error_ok: list[bool] = []
         self.failures: dict[str, Exception] = {}
         self.shell_result: str | bytes = "shell-result"
 
@@ -23,8 +24,9 @@ class FakeDevice:
         if failure := self.failures.get(operation):
             raise failure
 
-    def screenshot(self):
+    def screenshot(self, *, error_ok: bool = True):
         self._raise_if_configured("screenshot")
+        self.screenshot_error_ok.append(error_ok)
         return "image"
 
     def click(self, x: int, y: int) -> None:
@@ -198,6 +200,7 @@ def test_session_forwards_all_device_operations() -> None:
     session.start_app("pkg.start")
 
     device = client.devices["B"]
+    assert device.screenshot_error_ok == [False]
     assert device.clicks == [(1, 2)]
     assert device.swipes == [(3, 4, 5, 6, 0.7)]
     assert device.shell_commands == ["echo test"]
