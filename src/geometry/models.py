@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
+from numbers import Real
+
+
+def _require_integer(name: str, value: object) -> None:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise TypeError(f"{name} must be an integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -9,6 +16,8 @@ class Size:
     height: int
 
     def __post_init__(self) -> None:
+        _require_integer("width", self.width)
+        _require_integer("height", self.height)
         if self.width <= 0 or self.height <= 0:
             raise ValueError("size dimensions must be positive")
 
@@ -17,6 +26,10 @@ class Size:
 class PixelPoint:
     x: int
     y: int
+
+    def __post_init__(self) -> None:
+        _require_integer("x", self.x)
+        _require_integer("y", self.y)
 
     def as_tuple(self) -> tuple[int, int]:
         return self.x, self.y
@@ -28,6 +41,11 @@ class NormalizedPoint:
     y: float
 
     def __post_init__(self) -> None:
+        for value in (self.x, self.y):
+            if not isinstance(value, Real) or isinstance(value, bool):
+                raise TypeError("normalized coordinates must be real numbers")
+            if not math.isfinite(float(value)):
+                raise ValueError("normalized coordinates must be finite")
         if not (0.0 <= self.x <= 1.0 and 0.0 <= self.y <= 1.0):
             raise ValueError("normalized coordinates must be between 0 and 1")
 
@@ -40,6 +58,10 @@ class RectXYXY:
     bottom: int
 
     def __post_init__(self) -> None:
+        _require_integer("left", self.left)
+        _require_integer("top", self.top)
+        _require_integer("right", self.right)
+        _require_integer("bottom", self.bottom)
         if self.right <= self.left or self.bottom <= self.top:
             raise ValueError("rectangle must have positive width and height")
 
@@ -76,6 +98,8 @@ class DisplayProfile:
     content_rect: RectXYXY
 
     def __post_init__(self) -> None:
+        _require_integer("density_dpi", self.density_dpi)
+        _require_integer("rotation_degrees", self.rotation_degrees)
         if self.density_dpi <= 0:
             raise ValueError("density must be positive")
         if self.rotation_degrees not in (0, 90, 180, 270):

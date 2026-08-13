@@ -1,6 +1,8 @@
 import math
 from typing import Tuple
 
+import numpy as np
+
 
 class CoordinateConverter:
     """Compatibility adapter for normalized framebuffer coordinates."""
@@ -37,7 +39,11 @@ class CoordinateConverter:
 
     @staticmethod
     def crop_roi(image, norm_box: Tuple[float, float, float, float]):
+        if not isinstance(image, np.ndarray) or image.ndim < 2:
+            raise ValueError("image must be a non-empty array with at least two dimensions")
         height, width = image.shape[:2]
+        if height <= 0 or width <= 0:
+            raise ValueError("image must be a non-empty array with at least two dimensions")
         left, top, right, bottom = norm_box
         if not (0.0 <= left < right <= 1.0 and 0.0 <= top < bottom <= 1.0):
             raise ValueError("ROI must be ordered and inside the normalized screen")

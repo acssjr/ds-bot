@@ -1,3 +1,4 @@
+import math
 import random
 
 import numpy as np
@@ -5,7 +6,7 @@ import pytest
 from hypothesis import given, strategies as st
 
 from src.geometry.mapper import CoordinateMapper
-from src.geometry.models import DisplayProfile, NormalizedPoint, RectXYXY, Size
+from src.geometry.models import DisplayProfile, NormalizedPoint, PixelPoint, RectXYXY, Size
 from src.utils.coordinates import CoordinateConverter
 
 
@@ -28,6 +29,33 @@ def test_normalized_edges_stay_inside_framebuffer() -> None:
 def test_normalized_points_reject_out_of_range_values() -> None:
     with pytest.raises(ValueError, match="between 0 and 1"):
         NormalizedPoint(1.01, 0.5)
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: Size(True, 1),
+        lambda: Size(1.5, 2),
+        lambda: PixelPoint(math.nan, 1),
+        lambda: PixelPoint(1, object()),
+        lambda: RectXYXY(0.0, 0, 2, 2),
+        lambda: RectXYXY(0, 0, 1.5, 2),
+        lambda: DisplayProfile(Size(2, 2), Size(2, 2), True, 0, RectXYXY(0, 0, 2, 2)),
+        lambda: DisplayProfile(Size(2, 2), Size(2, 2), 160, False, RectXYXY(0, 0, 2, 2)),
+    ],
+)
+def test_integer_geometry_rejects_bool_and_non_integer_values(factory) -> None:
+    with pytest.raises(TypeError, match="must be an integer"):
+        factory()
+
+
+@pytest.mark.parametrize(
+    "x, y",
+    [(True, 0.5), (math.nan, 0.5), (math.inf, 0.5), (object(), 0.5)],
+)
+def test_normalized_point_rejects_non_finite_or_non_real_values(x, y) -> None:
+    with pytest.raises((TypeError, ValueError), match="real numbers|finite"):
+        NormalizedPoint(x, y)
 
 
 @given(
@@ -62,3 +90,9 @@ def test_legacy_converter_round_trips_and_full_roi_keeps_last_pixel() -> None:
 
     image = np.zeros((1280, 720, 3), dtype=np.uint8)
     assert CoordinateConverter.crop_roi(image, (0.0, 0.0, 1.0, 1.0)).shape == image.shape
+
+
+@pytest.mark.parametrize("image", [None, np.array([]), np.empty((0, 10, 3)), np.empty((10, 0, 3))])
+def test_crop_roi_rejects_missing_or_empty_images(image) -> None:
+    with pytest.raises(ValueError, match="non-empty array"):
+        CoordinateConverter.crop_roi(image, (0.0, 0.0, 1.0, 1.0))
