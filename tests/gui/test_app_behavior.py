@@ -3,6 +3,8 @@ from __future__ import annotations
 import queue
 from collections.abc import Callable
 
+import pytest
+
 from src.core.cancellation import CancellationToken
 from src.core.events import EventBus, EventKind, RuntimeEvent
 from src.core.lifecycle import Lifecycle
@@ -79,11 +81,27 @@ class StartFailingThread:
 
 
 class AliveThread:
+    daemon = True
+
     def is_alive(self) -> bool:
         return True
 
     def join(self, _timeout: float | None = None) -> None:
         raise AssertionError("GUI close must not join the worker")
+
+
+class CancelAwareThread:
+    daemon = True
+
+    def __init__(self, cancellation: CancellationToken) -> None:
+        self.cancellation = cancellation
+        self.join_timeouts: list[float | None] = []
+
+    def is_alive(self) -> bool:
+        return not self.cancellation.cancelled
+
+    def join(self, timeout: float | None = None) -> None:
+        self.join_timeouts.append(timeout)
 
 
 class FailingCapture:
@@ -122,6 +140,9 @@ def make_headless_gui(
     gui._last_lifecycle_status = None
     gui._last_error_text = None
     gui._reported_dropped_events = 0
+    gui._clock = gui_app.time.monotonic
+    gui._close_deadline = None
+    gui._close_finalized = False
     gui.device_option = FakeWidget("device", value="emulator-1", timeline=timeline)
     gui.status_badge = FakeWidget("status", timeline=timeline)
     gui.btn_start = FakeWidget("start", timeline=timeline)
@@ -340,6 +361,50 @@ def test_discovery_thread_start_failure_restores_controls() -> None:
     assert gui.btn_refresh.options["state"] == "normal"
 
 
+@pytest.mark.parametrize(
+    "serials",
+    [("emulator-1",), ("emulator-1", "emulator-2")],
+)
+def test_discovery_requires_human_device_selection(serials: tuple[str, ...]) -> None:
+    gui = make_headless_gui()
+    gui.is_running = False
+    gui._available_serials = ()
+    gui._discovery_results.put_nowait(
+        gui_app.DeviceDiscoveryResult(serials=serials)
+    )
+
+    gui._process_discovery_results()
+
+    assert gui._available_serials == serials
+    assert gui.device_option.options["values"] == [
+        gui_app.DEVICE_SELECTION_PLACEHOLDER,
+        *serials,
+    ]
+    assert gui.device_option.value == gui_app.DEVICE_SELECTION_PLACEHOLDER
+    assert gui.btn_start.options["state"] == "disabled"
+
+    gui.device_option.set(serials[-1])
+    gui._on_device_selected(serials[-1])
+
+    assert gui.btn_start.options["state"] == "normal"
+
+
+def test_device_placeholder_cannot_start_observation() -> None:
+    gui = make_headless_gui()
+    gui.is_running = False
+    gui.device_option.set(gui_app.DEVICE_SELECTION_PLACEHOLDER)
+
+    def forbidden_factory(**_kwargs: object) -> StartFailingThread:
+        raise AssertionError("placeholder must not create a worker")
+
+    gui._thread_factory = forbidden_factory
+
+    gui.start_observation()
+
+    assert gui.is_running is False
+    assert gui._bot_thread is None
+
+
 def test_controls_keep_refresh_disabled_while_worker_reference_is_active() -> None:
     gui = make_headless_gui()
     gui.is_running = False
@@ -351,14 +416,73 @@ def test_controls_keep_refresh_disabled_while_worker_reference_is_active() -> No
     assert gui.btn_refresh.options["state"] == "disabled"
 
 
-def test_close_cancels_and_destroys_even_if_log_sink_removal_fails() -> None:
+def test_close_waits_for_cancelled_worker_then_joins_and_destroys() -> None:
+    cancellation = CancellationToken()
+    gui = make_headless_gui(cancellation=cancellation)
+    worker = CancelAwareThread(cancellation)
+    gui._bot_thread = worker
+    gui._log_sink_id = None
+    destroyed: list[bool] = []
+    gui.destroy = lambda: destroyed.append(True)
+
+    gui._on_close()
+
+    assert cancellation.cancelled is True
+    assert worker.join_timeouts == [0]
+    assert gui._bot_thread is None
+    assert destroyed == [True]
+
+
+def test_close_with_live_worker_schedules_poll_without_blocking() -> None:
     cancellation = CancellationToken()
     gui = make_headless_gui(cancellation=cancellation)
     gui._bot_thread = AliveThread()
+    gui._log_sink_id = None
+    scheduled: list[tuple[int, Callable[[], None]]] = []
+    gui.after = lambda delay, callback: scheduled.append((delay, callback))
+    destroyed: list[bool] = []
+    gui.destroy = lambda: destroyed.append(True)
+
+    gui._on_close()
+
+    assert cancellation.cancelled is True
+    assert gui._closing is True
+    assert gui.status_badge.options["text"] == "🟠 ENCERRANDO"
+    assert gui.btn_start.options["state"] == "disabled"
+    assert gui.btn_stop.options["state"] == "disabled"
+    assert scheduled and scheduled[0][0] == gui_app.CLOSE_POLL_MS
+    assert destroyed == []
+
+
+def test_close_deadline_uses_daemon_fallback_and_destroys() -> None:
+    now = [10.0]
+    cancellation = CancellationToken()
+    gui = make_headless_gui(cancellation=cancellation)
+    gui._clock = lambda: now[0]
+    gui._bot_thread = AliveThread()
+    gui._log_sink_id = None
+    scheduled: list[tuple[int, Callable[[], None]]] = []
+    gui.after = lambda delay, callback: scheduled.append((delay, callback))
+    destroyed: list[bool] = []
+    gui.destroy = lambda: destroyed.append(True)
+
+    gui._on_close()
+    now[0] = 10.0 + gui_app.CLOSE_TIMEOUT_SECONDS
+    scheduled.pop()[1]()
+
+    assert destroyed == [True]
+    assert gui._close_finalized is True
+
+
+def test_close_without_worker_destroys_even_if_log_sink_removal_fails() -> None:
+    cancellation = CancellationToken()
+    gui = make_headless_gui(cancellation=cancellation)
+    gui._bot_thread = None
     gui._log_sink_id = 2_147_483_647
     destroyed: list[bool] = []
     gui.destroy = lambda: destroyed.append(True)
 
+    gui._on_close()
     gui._on_close()
 
     assert cancellation.cancelled is True

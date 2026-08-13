@@ -30,6 +30,9 @@ LOG_POLL_MS = 150
 DISCOVERY_POLL_MS = 100
 ADB_SOCKET_TIMEOUT_SECONDS = 5.0
 MAX_LOG_LINES = 2000
+DEVICE_SELECTION_PLACEHOLDER = "Selecione um dispositivo..."
+CLOSE_POLL_MS = 100
+CLOSE_TIMEOUT_SECONDS = ADB_SOCKET_TIMEOUT_SECONDS + 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +140,9 @@ class DraftShowdownGUI(ctk.CTk):
         self.minsize(860, 560)
 
         self._closing = False
+        self._close_finalized = False
+        self._close_deadline: float | None = None
+        self._clock = time.monotonic
         self.is_running = False
         self._available_serials: tuple[str, ...] = ()
         self._runtime_events: EventBus | None = None
@@ -225,9 +231,9 @@ class DraftShowdownGUI(ctk.CTk):
         )
         self.device_option = ctk.CTkOptionMenu(
             device_frame,
-            values=["Buscando dispositivos..."],
+            values=[DEVICE_SELECTION_PLACEHOLDER],
             width=240,
-            command=lambda _value: self._update_controls(),
+            command=self._on_device_selected,
         )
         self.device_option.pack(side="left", padx=5, pady=10)
 
@@ -348,17 +354,23 @@ class DraftShowdownGUI(ctk.CTk):
                 values = ["ADB indisponível"]
                 self._available_serials = ()
             elif result.serials:
-                values = list(result.serials)
+                values = [DEVICE_SELECTION_PLACEHOLDER, *result.serials]
                 self._available_serials = result.serials
             else:
                 values = ["Nenhum dispositivo ADB"]
                 self._available_serials = ()
             self.device_option.configure(values=values)
-            self.device_option.set(values[0])
+            if result.serials:
+                self.device_option.set(DEVICE_SELECTION_PLACEHOLDER)
+            else:
+                self.device_option.set(values[0])
             self.btn_refresh.configure(state="normal")
             self._update_controls()
 
         self.after(DISCOVERY_POLL_MS, self._process_discovery_results)
+
+    def _on_device_selected(self, _selected: str) -> None:
+        self._update_controls()
 
     def start_observation(self) -> None:
         if self._closing or self.is_running or self._bot_thread is not None:
@@ -530,7 +542,10 @@ class DraftShowdownGUI(ctk.CTk):
         self.btn_refresh.configure(
             state=(
                 "disabled"
-                if self.is_running or self._bot_thread is not None or discovering
+                if self._closing
+                or self.is_running
+                or self._bot_thread is not None
+                or discovering
                 else "normal"
             )
         )
@@ -564,18 +579,55 @@ class DraftShowdownGUI(ctk.CTk):
         if self._closing:
             return
         self._closing = True
+        self.status_badge.configure(text="🟠 ENCERRANDO", fg_color="#E65100")
+        self.btn_start.configure(state="disabled")
+        self.btn_pause.configure(state="disabled")
+        self.btn_stop.configure(state="disabled")
+        self.btn_refresh.configure(state="disabled")
+        if self._cancellation is not None:
+            self._cancellation.cancel()
+        self._close_deadline = self._clock() + CLOSE_TIMEOUT_SECONDS
+        self._poll_close()
+
+    def _poll_close(self) -> None:
+        if self._close_finalized:
+            return
+
+        worker = self._bot_thread
+        if worker is None:
+            self._finalize_close()
+            return
+
+        if not worker.is_alive():
+            self._reap_worker(self._runtime_events)
+            self._finalize_close()
+            return
+
+        deadline = self._close_deadline
+        if deadline is not None and self._clock() >= deadline:
+            if self._runtime_events is not None:
+                self._consume_runtime_events(self._runtime_events)
+            logger.warning(
+                "Worker daemon não encerrou em {:.1f}s; fechando a GUI com fallback.",
+                CLOSE_TIMEOUT_SECONDS,
+            )
+            self._finalize_close()
+            return
+
+        self.after(CLOSE_POLL_MS, self._poll_close)
+
+    def _finalize_close(self) -> None:
+        if self._close_finalized:
+            return
+        self._close_finalized = True
         try:
-            if self._cancellation is not None:
-                self._cancellation.cancel()
+            if self._log_sink_id is not None:
+                logger.remove(self._log_sink_id)
+        except Exception:
+            pass
         finally:
-            try:
-                if self._log_sink_id is not None:
-                    logger.remove(self._log_sink_id)
-            except Exception:
-                pass
-            finally:
-                self._log_sink_id = None
-                self.destroy()
+            self._log_sink_id = None
+            self.destroy()
 
 
 def main() -> None:
