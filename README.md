@@ -79,7 +79,8 @@ A GUI descobre os dispositivos fora da thread do Tk, exige a escolha explícita 
 
 ## Limitações conhecidas
 
-- `HOME` possui um template verificado em captura ADB real; as demais telas ainda usam cobertura incompleta;
+- uma partida ADB real completa é reconhecida nas etapas `HOME`, `COLLECTION_MENU`, `WAIT_MATCHMAKING`, `DRAFT_SCREEN`, `COMBAT`, `ROUND_RESULT` e `VICTORY_SUMMARY`;
+- anúncios, recompensas especiais e algumas telas fora do fluxo normal da partida ainda não possuem cobertura calibrada;
 - capturas reais podem permanecer em `UNKNOWN`, o que é esperado nesta fundação;
 - não há ainda OCR especializado, detector de cartas validado, decisão de draft, execução de ações, verificação de pós-condição ou recuperação automática;
 - replay demonstra determinismo e segurança estrutural, mas não substitui a validação controlada de captura ao vivo no MEmu.

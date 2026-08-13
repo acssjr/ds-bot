@@ -163,11 +163,46 @@ class ScreenClassifier:
                     accepted = score >= template.threshold
 
         if best_template is None:
+            if self._is_round_result(frame):
+                return ScreenState.ROUND_RESULT, 0.85, "split_score_panel"
             return ScreenState.UNKNOWN, 0.0, None
         if accepted:
-            return best_template.screen, best_score, best_template.template_id
+            screen = best_template.screen
+            sub_element = best_template.template_id
+            if screen is ScreenState.COMBAT and self._has_draft_choices(frame):
+                screen = ScreenState.DRAFT_SCREEN
+                sub_element = f"{best_template.template_id}:choice_cards"
+            return screen, best_score, sub_element
+        if self._is_round_result(frame):
+            return ScreenState.ROUND_RESULT, 0.85, "split_score_panel"
         return (
             ScreenState.UNKNOWN,
             best_score,
             f"candidate:{best_template.screen.value}/{best_template.template_id}",
         )
+
+    @staticmethod
+    def _has_draft_choices(frame: np.ndarray) -> bool:
+        """Detect the large tan choice cards while the stable battle HUD is present."""
+        height = frame.shape[0]
+        region = frame[round(height * 0.30) : round(height * 0.82), :]
+        hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+        tan_pixels = cv2.inRange(
+            hsv,
+            np.array([5, 25, 145], dtype=np.uint8),
+            np.array([40, 230, 255], dtype=np.uint8),
+        )
+        return bool(np.mean(tan_pixels > 0) >= 0.10)
+
+    @staticmethod
+    def _is_round_result(frame: np.ndarray) -> bool:
+        """Recognize the red/blue between-round score panel without player text."""
+        height, width = frame.shape[:2]
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        center = hsv[round(height * 0.18) : round(height * 0.82), round(width * 0.08) : round(width * 0.92)]
+        split = center.shape[0] // 2
+        top = center[:split]
+        bottom = center[split:]
+        red = cv2.inRange(top, np.array([0, 70, 120]), np.array([12, 255, 255]))
+        blue = cv2.inRange(bottom, np.array([90, 45, 90]), np.array([135, 255, 255]))
+        return bool(np.mean(red > 0) >= 0.35 and np.mean(blue > 0) >= 0.35)
