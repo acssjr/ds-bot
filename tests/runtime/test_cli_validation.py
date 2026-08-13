@@ -88,3 +88,15 @@ def test_main_fallback_stderr_survives_failing_logger(monkeypatch, capsys) -> No
     monkeypatch.setattr("src.main.DeviceSession", lambda serial: (_ for _ in ()).throw(RuntimeError("adb down")))
     assert main(["--device", "offline"]) == 1
     assert "runtime failure" in capsys.readouterr().err
+
+
+def test_main_treats_runtime_value_error_as_operational_failure(monkeypatch, tmp_path: Path) -> None:
+    path = tmp_path / "one.png"
+    assert cv2.imwrite(str(path), np.zeros((2, 2, 3), dtype=np.uint8))
+
+    class FailingRuntime:
+        def run(self, *, max_frames):
+            raise ValueError("perception failed")
+
+    monkeypatch.setattr("src.main.BotRuntime", lambda **kwargs: FailingRuntime())
+    assert main(["--replay", str(tmp_path), "--frames", "1"]) == 1

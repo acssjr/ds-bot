@@ -20,6 +20,10 @@ from src.utils.logging_config import setup_logger
 from src.vision.legacy_adapter import LegacyVisionAdapter
 
 
+class _ConfigurationError(RuntimeError):
+    pass
+
+
 def _device_serial(value: str) -> str:
     serial = value.strip()
     if not serial:
@@ -59,12 +63,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    cancellation: CancellationToken | None = None
     try:
-        return _main(args, cancellation_holder=lambda token: token)
+        return _main(args)
     except KeyboardInterrupt:
         return 130
-    except (FileNotFoundError, TypeError, ValueError) as exc:
+    except _ConfigurationError as exc:
         _report_error("runtime configuration is invalid", exc)
         return 2
     except Exception as exc:
@@ -79,7 +82,7 @@ def _report_error(prefix: str, exc: BaseException) -> None:
         print(f"{prefix}: {exc}", file=sys.stderr)
 
 
-def _main(args, cancellation_holder) -> int:
+def _main(args) -> int:
     setup_logger("INFO")
     cancellation = CancellationToken()
     events = LoggingEventSink(logger)
@@ -110,8 +113,14 @@ def _main(args, cancellation_holder) -> int:
         connection_generation = lambda: session.connection_generation
         max_frames = args.frames
 
+    try:
+        perception = LegacyVisionAdapter()
+        settings = RuntimeSettings(args.interval)
+    except (FileNotFoundError, TypeError, ValueError) as exc:
+        raise _ConfigurationError(str(exc)) from exc
+
     capture = CaptureManager(source, device_serial=serial, connection_generation=connection_generation)
-    runtime = BotRuntime(capture=capture, perception=LegacyVisionAdapter(), events=events, lifecycle=Lifecycle(), cancellation=cancellation, settings=RuntimeSettings(args.interval))
+    runtime = BotRuntime(capture=capture, perception=perception, events=events, lifecycle=Lifecycle(), cancellation=cancellation, settings=settings)
 
     logger.warning("OBSERVE-ONLY: no taps or swipes can be sent by this runtime")
     processed = runtime.run(max_frames=max_frames)
