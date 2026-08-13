@@ -1,21 +1,33 @@
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, Protocol
+
 import numpy as np
 
+from src.capture.models import CapturedImage
+
+
+class CaptureSource(Protocol):
+    def start(self) -> None: ...
+
+    def capture(self) -> CapturedImage: ...
+
+    def stop(self) -> None: ...
+
+
 class BaseCapture(ABC):
-    """Interface abstrata para captura de tela do emulador/dispositivo."""
+    """Legacy capture interface retained until runtime migration is complete."""
 
     @abstractmethod
     def start(self) -> bool:
-        """Inicializa a captura de tela."""
-        pass
+        """Initialize capture."""
+        raise NotImplementedError
 
     @abstractmethod
     def get_latest_frame(self) -> Optional[np.ndarray]:
-        """Retorna o frame mais recente como uma matriz BGR (NumPy ndarray)."""
-        pass
+        """Return the latest BGR image."""
+        raise NotImplementedError
 
     @abstractmethod
     def stop(self) -> None:
-        """Encerra os recursos de captura."""
-        pass
+        """Release capture resources."""
+        raise NotImplementedError
