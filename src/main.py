@@ -11,7 +11,7 @@ from src.strategy.draft_evaluator import DraftEvaluator
 from src.actions.action_planner import ActionPlanner
 from src.controllers.adb_controller import ADBController
 
-def main_loop():
+def main() -> None:
     logger = setup_logger("INFO")
     logger.info("==================================================")
     logger.info("Iniciando Bot Autônomo - Draft Showdown (Visão + Ads)")
@@ -117,4 +117,4 @@ def main_loop():
         logger.info("Bot finalizado com sucesso.")
 
 if __name__ == "__main__":
-    main_loop()
+    main()
