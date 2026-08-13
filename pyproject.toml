@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "draft-showdown-bot"
 version = "0.2.0"
-description = "Observe-only visual foundation for Draft Showdown"
+description = "Observe-first visual foundation with bounded ad recovery for Draft Showdown"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [

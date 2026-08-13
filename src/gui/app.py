@@ -23,6 +23,7 @@ from src.gui.presenter import (
 )
 from src.runtime.bot_runtime import BotRuntime, RuntimeSettings
 from src.recording.session_recorder import SessionRecorder
+from src.recovery.app_supervisor import RewardedAdAppSupervisor
 from src.vision.legacy_adapter import LegacyVisionAdapter
 
 
@@ -99,7 +100,7 @@ def run_observer_worker(
     runtime_factory: Callable[[str, CancellationToken, EventBus], BotRuntime]
     | None = None,
 ) -> None:
-    """Assemble and run one observe-only session without touching Tk state."""
+    """Assemble one observation session with bounded external-app recovery."""
     try:
         if runtime_factory is None:
             session = DeviceSession(
@@ -120,6 +121,7 @@ def run_observer_worker(
                 cancellation=cancellation,
                 settings=RuntimeSettings(0.15),
                 recorder=SessionRecorder(),
+                recovery=RewardedAdAppSupervisor(session),
             )
         else:
             runtime = runtime_factory(serial, cancellation, events)
@@ -134,7 +136,7 @@ def run_observer_worker(
         return
 
     logger.warning(
-        "GUI em modo SOMENTE OBSERVAÇÃO; nenhuma ação será enviada."
+        "GUI sem ações de gameplay; recuperação externa de anúncios está ativa."
     )
     try:
         runtime.run()
@@ -144,7 +146,7 @@ def run_observer_worker(
 
 
 class DraftShowdownGUI(ctk.CTk):
-    """Tk adapter for one explicitly selected, observe-only runtime session."""
+    """Tk adapter for one explicitly selected observation runtime session."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -270,7 +272,7 @@ class DraftShowdownGUI(ctk.CTk):
 
         ctk.CTkLabel(
             device_frame,
-            text="Nenhum toque, gesto ou controle de aplicativo é permitido nesta fase.",
+            text="Sem toques de gameplay; anúncios externos usam Voltar/reabrir jogo.",
             text_color="#A9B7C6",
         ).pack(side="right", padx=15, pady=10)
 
@@ -338,10 +340,10 @@ class DraftShowdownGUI(ctk.CTk):
         ctk.CTkLabel(
             panel,
             text=(
-                "Estratégia de draft, posicionamento, recompensas e anúncios serão "
+                "Estratégia de draft, posicionamento e coleta de recompensas serão "
                 "habilitados apenas depois das etapas de percepção, verificação de "
-                "pós-condição e recuperação. Nesta fundação a interface apenas "
-                "captura e apresenta observações."
+                "pós-condição e recuperação. A interface observa; somente anúncios "
+                "que abrem outro aplicativo permitem Voltar/reabrir o jogo."
             ),
             justify="left",
             wraplength=760,
@@ -533,7 +535,8 @@ class DraftShowdownGUI(ctk.CTk):
                     f"Captura: {event.payload.get('capture_strategy', '-')} | "
                     f"Válidos: {event.payload.get('valid_frames', 0)} | "
                     f"Pretos descartados: {event.payload.get('blank_frames', 0)} | "
-                    f"Recuperações: {event.payload.get('capture_recoveries', 0)}"
+                    f"Recuperações: {event.payload.get('capture_recoveries', 0)} | "
+                    f"Resets ADB: {event.payload.get('capture_connection_resets', 0)}"
                 ),
                 text_color="#A9B7C6",
             )
@@ -546,9 +549,25 @@ class DraftShowdownGUI(ctk.CTk):
                     f"Captura: {'instável, tentando novamente' if degraded else 'recuperada'} | "
                     f"Válidos: {event.payload.get('valid_frames', 0)} | "
                     f"Pretos descartados: {event.payload.get('blank_frames', 0)} | "
-                    f"Falhas transitórias: {event.payload.get('capture_failures', 0)}"
+                    f"Ciclos seguidos: {event.payload.get('consecutive_capture_failures', 0)} | "
+                    f"Resets ADB: {event.payload.get('capture_connection_resets', 0)}"
                 ),
                 text_color="#FFB74D" if degraded else "#81C784",
+            )
+            return
+
+        if event.kind is EventKind.RECOVERY:
+            status = str(event.payload.get("status", "-")).upper()
+            method = event.payload.get("method", "-")
+            package = event.payload.get("external_package", "-")
+            logger.info(
+                "Recuperação externa: {} via {} (origem: {})",
+                status,
+                method,
+                package,
+            )
+            self.lbl_context_state.configure(
+                text=f"Recuperação de anúncio: {status} via {method} | {package}"
             )
             return
 

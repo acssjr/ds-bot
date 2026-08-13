@@ -20,6 +20,8 @@ class FakeDevice:
         self.shell_call_options: list[tuple[object, object, object]] = []
         self.stopped_apps: list[str] = []
         self.started_apps: list[str] = []
+        self.keyevents: list[str] = []
+        self.current_package = "com.QuestLab.DraftWar"
         self.screenshot_error_ok: list[bool] = []
         self.failures: dict[str, Exception] = {}
         self.shell_result: str | bytes = "shell-result"
@@ -54,6 +56,16 @@ class FakeDevice:
     def app_start(self, package_name: str) -> None:
         self._raise_if_configured("start_app")
         self.started_apps.append(package_name)
+
+    def app_current(self):
+        return type(
+            "RunningApp",
+            (),
+            {"package": self.current_package, "activity": "MainActivity"},
+        )()
+
+    def keyevent(self, key: str) -> None:
+        self.keyevents.append(key)
 
 
 class FakeAdbClient:
@@ -203,6 +215,8 @@ def test_session_forwards_all_device_operations() -> None:
     assert session.shell("echo test") == "shell-result"
     session.stop_app("pkg.stop")
     session.start_app("pkg.start")
+    session.press_back()
+    foreground = session.foreground_app()
 
     device = client.devices["B"]
     assert device.screenshot_error_ok == [False]
@@ -211,6 +225,20 @@ def test_session_forwards_all_device_operations() -> None:
     assert device.shell_commands == ["echo test"]
     assert device.stopped_apps == ["pkg.stop"]
     assert device.started_apps == ["pkg.start"]
+    assert device.keyevents == ["BACK"]
+    assert foreground.package == "com.QuestLab.DraftWar"
+    assert foreground.activity == "MainActivity"
+
+
+def test_reconnect_refreshes_device_handle_and_generation() -> None:
+    client = FakeAdbClient(["B"])
+    session = DeviceSession("B", adb_client=client)
+    session.connect()
+
+    session.reconnect()
+
+    assert session.connected is True
+    assert session.connection_generation == 2
 
 
 def test_shell_rejects_non_string_results() -> None:

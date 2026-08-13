@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import subprocess
+from dataclasses import dataclass
 from io import BytesIO
 from numbers import Real
 from typing import Any
@@ -21,6 +22,12 @@ class DeviceNotFound(DeviceSessionError):
 
 class DeviceNotConnected(DeviceSessionError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class ForegroundApp:
+    package: str
+    activity: str
 
 
 class DeviceSession:
@@ -79,6 +86,11 @@ class DeviceSession:
     def disconnect(self) -> None:
         self._device = None
 
+    def reconnect(self) -> None:
+        """Refresh the adbutils device handle without restarting the ADB server."""
+        self.disconnect()
+        self.connect()
+
     def _require_device(self):
         if self._device is None:
             raise DeviceNotConnected(f"device {self._serial!r} is not connected")
@@ -96,6 +108,19 @@ class DeviceSession:
 
     def screenshot(self):
         return self._invoke("screenshot", "screenshot", error_ok=False)
+
+    def foreground_app(self) -> ForegroundApp:
+        current = self._invoke("foreground_app", "app_current")
+        package = str(getattr(current, "package", "") or "").strip()
+        activity = str(getattr(current, "activity", "") or "").strip()
+        if not package:
+            raise DeviceSessionError(
+                f"ADB returned no foreground package for {self._serial!r}"
+            )
+        return ForegroundApp(package=package, activity=activity)
+
+    def press_back(self) -> None:
+        self._invoke("press_back", "keyevent", "BACK")
 
     def screencap_png(self) -> Image.Image:
         try:

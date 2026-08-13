@@ -105,7 +105,7 @@ def test_adb_source_uses_only_dedicated_observe_only_screencap() -> None:
             return Image.fromarray(np.array([[[255, 0, 0]]], dtype=np.uint8))
 
         def __getattr__(self, name):
-            if name in {"click", "swipe", "shell", "stop_app", "start_app", "screenshot"}:
+            if name in {"click", "swipe", "shell", "stop_app", "start_app"}:
                 raise AssertionError(f"unsafe operation requested: {name}")
             raise AttributeError(name)
 
@@ -190,7 +190,7 @@ def test_adb_source_rejects_consecutive_blank_memu_frames() -> None:
     )
     source.start()
 
-    with pytest.raises(CaptureTemporarilyUnavailable, match="2 consecutive blank frames"):
+    with pytest.raises(CaptureTemporarilyUnavailable, match="4 consecutive blank frames"):
         source.capture()
 
 
@@ -207,6 +207,61 @@ def test_adb_source_rejects_nearly_black_memu_frame_with_pixel_sparkles() -> Non
 
     with pytest.raises(CaptureTemporarilyUnavailable):
         source.capture()
+
+
+def test_adb_source_uses_adbutils_as_independent_third_strategy() -> None:
+    class ThreeStrategySession:
+        connected = True
+        connection_generation = 1
+
+        def screencap_exec_out_png(self):
+            return Image.fromarray(np.zeros((2, 2, 3), dtype=np.uint8))
+
+        def screencap_png(self):
+            return Image.fromarray(np.zeros((2, 2, 3), dtype=np.uint8))
+
+        def screenshot(self):
+            return Image.fromarray(np.full((2, 2, 3), 127, dtype=np.uint8))
+
+    source = ADBCaptureSource(ThreeStrategySession(), clock=lambda: 3.0)
+    source.start()
+
+    captured = source.capture()
+
+    assert captured.image.mean() == 127
+    assert source.health.last_strategy == "adbutils"
+
+
+def test_adb_source_refreshes_handle_after_repeated_unavailable_cycles() -> None:
+    class ResettableBlankSession:
+        connected = True
+        connection_generation = 1
+
+        def __init__(self) -> None:
+            self.reconnect_calls = 0
+
+        def screencap_png(self):
+            return Image.fromarray(np.zeros((2, 2, 3), dtype=np.uint8))
+
+        def reconnect(self):
+            self.reconnect_calls += 1
+
+    session = ResettableBlankSession()
+    source = ADBCaptureSource(
+        session,
+        max_capture_attempts=1,
+        retry_delay_seconds=0,
+        reset_after_failures=3,
+    )
+    source.start()
+
+    for _ in range(3):
+        with pytest.raises(CaptureTemporarilyUnavailable):
+            source.capture()
+
+    assert session.reconnect_calls == 1
+    assert source.health.connection_resets == 1
+    assert source.health.consecutive_failures == 3
 
 
 def test_manager_reuses_only_a_fresh_frame_from_current_generation() -> None:

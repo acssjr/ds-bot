@@ -21,6 +21,8 @@ class CaptureHealth:
     operation_errors: int
     transient_failures: int
     recoveries: int
+    consecutive_failures: int
+    connection_resets: int
     last_strategy: str
 
 
@@ -33,16 +35,20 @@ class ADBCaptureSource:
         max_capture_attempts: int = 3,
         retry_delay_seconds: float = 0.08,
         sleeper: Callable[[float], None] = time.sleep,
+        reset_after_failures: int = 3,
     ):
         if max_capture_attempts <= 0:
             raise ValueError("max_capture_attempts must be positive")
         if retry_delay_seconds < 0:
             raise ValueError("retry_delay_seconds must be non-negative")
+        if reset_after_failures <= 0:
+            raise ValueError("reset_after_failures must be positive")
         self._session = session
         self._clock = clock
         self._max_capture_attempts = max_capture_attempts
         self._retry_delay_seconds = retry_delay_seconds
         self._sleeper = sleeper
+        self._reset_after_failures = reset_after_failures
         self._started = False
         self._attempts = 0
         self._valid_frames = 0
@@ -50,6 +56,8 @@ class ADBCaptureSource:
         self._operation_errors = 0
         self._transient_failures = 0
         self._recoveries = 0
+        self._consecutive_failures = 0
+        self._connection_resets = 0
         self._last_strategy = "-"
         self._degraded = False
 
@@ -62,6 +70,8 @@ class ADBCaptureSource:
             operation_errors=self._operation_errors,
             transient_failures=self._transient_failures,
             recoveries=self._recoveries,
+            consecutive_failures=self._consecutive_failures,
+            connection_resets=self._connection_resets,
             last_strategy=self._last_strategy,
         )
 
@@ -83,6 +93,11 @@ class ADBCaptureSource:
         if callable(exec_out):
             strategies.append(("exec-out", exec_out))
         strategies.append(("shell", self._session.screencap_png))
+        adbutils_screenshot = getattr(type(self._session), "screenshot", None)
+        if callable(adbutils_screenshot):
+            strategies.append(
+                ("adbutils", lambda: adbutils_screenshot(self._session))
+            )
 
         for attempt in range(1, self._max_capture_attempts + 1):
             for strategy, capture_image in strategies:
@@ -111,6 +126,7 @@ class ADBCaptureSource:
                             blank_in_cycle,
                         )
                     self._degraded = False
+                    self._consecutive_failures = 0
                     return CapturedImage(bgr, captured_at_monotonic, CaptureBackend.ADB_PNG)
 
                 blank_in_cycle += 1
@@ -119,12 +135,28 @@ class ADBCaptureSource:
                 self._sleeper(self._retry_delay_seconds)
 
         self._transient_failures += 1
+        self._consecutive_failures += 1
         self._degraded = True
-        logger.warning(
-            "ADB capture temporarily unavailable: {} blank result(s), {} operation error(s); observation will keep retrying",
-            blank_in_cycle,
-            errors_in_cycle,
-        )
+        if self._consecutive_failures % self._reset_after_failures == 0:
+            reconnect = getattr(self._session, "reconnect", None)
+            if callable(reconnect):
+                try:
+                    reconnect()
+                    self._connection_resets += 1
+                    logger.info(
+                        "ADB capture handle refreshed after {} consecutive unavailable cycle(s)",
+                        self._consecutive_failures,
+                    )
+                except Exception as exc:
+                    self._operation_errors += 1
+                    logger.warning("ADB capture handle refresh failed: {!r}", exc)
+        if self._consecutive_failures == 1 or self._consecutive_failures % 10 == 0:
+            logger.warning(
+                "ADB capture temporarily unavailable: {} blank result(s), {} operation error(s); observation remains active (cycle {})",
+                blank_in_cycle,
+                errors_in_cycle,
+                self._consecutive_failures,
+            )
         raise CaptureTemporarilyUnavailable(
             f"ADB returned {blank_in_cycle} consecutive blank frames",
             attempts=len(strategies) * self._max_capture_attempts,

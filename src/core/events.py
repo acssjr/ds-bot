@@ -18,6 +18,7 @@ class EventKind(str, Enum):
     CAPTURE = "capture"
     DATASET = "dataset"
     INPUT = "input"
+    RECOVERY = "recovery"
     ERROR = "error"
 
 
@@ -100,7 +101,12 @@ class EventBus:
 
     @staticmethod
     def _is_control(event: RuntimeEvent) -> bool:
-        return event.kind in {EventKind.LIFECYCLE, EventKind.ERROR, EventKind.INPUT}
+        return event.kind in {
+            EventKind.LIFECYCLE,
+            EventKind.ERROR,
+            EventKind.INPUT,
+            EventKind.RECOVERY,
+        }
 
     def _drop_oldest(self, predicate) -> bool:
         for index, queued in enumerate(self._queue):

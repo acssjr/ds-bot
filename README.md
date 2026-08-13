@@ -2,18 +2,19 @@
 
 Fundação para automação visual confiável de **uma conta do Draft Showdown em uma única instância do MEmu**, escolhida explicitamente pelo número de série ADB.
 
-## Estado atual: somente observação
+## Estado atual: observação com recuperação externa limitada
 
-Esta versão é estritamente **SOMENTE OBSERVAÇÃO**. A CLI e a GUI usam o mesmo `BotRuntime` para capturar frames e publicar observações. O runtime atual:
+Esta versão continua sem automação de gameplay. A CLI e a GUI usam o mesmo `BotRuntime` para capturar frames e publicar observações; na GUI, existe apenas uma recuperação limitada para anúncios que abrem outro aplicativo. O runtime atual:
 
 - captura automaticamente a tela nativa do Android via ADB, ou reproduz imagens gravadas;
-- alterna entre `adb exec-out` e captura shell quando o MEmu devolve frames pretos transitórios, sem encerrar a observação;
+- alterna entre `adb exec-out`, captura shell e `adbutils` quando o MEmu devolve frames pretos transitórios; após falhas consecutivas, renova o handle ADB sem encerrar a observação;
 - na GUI, grava automaticamente um dataset seletivo em `datasets/sessions/`, priorizando transições, `UNKNOWN`, mudanças visuais e amostras periódicas;
 - processa apenas a instância MEmu selecionada explicitamente;
-- não cria controladores de entrada e **não envia taps, swipes ou outros comandos ao jogo**;
+- **não envia taps ou swipes de gameplay**;
+- na GUI, depois que um anúncio recompensado foi reconhecido, verifica o pacote Android em primeiro plano: se Play Store, navegador ou outro app externo foi aberto, tenta `Voltar`, depois reabrir e, como último fallback, reiniciar apenas o Draft Showdown;
 - encerra de forma cooperativa e registra eventos de ciclo de vida, frame, observação e erro.
 
-Os módulos legados de planejamento e entrada ainda existem no código como referência para etapas futuras, mas não são importados nem acionados pelos pontos de entrada atuais.
+Os módulos legados de planejamento e entrada ainda existem no código como referência para etapas futuras, mas não são importados nem acionados pelos pontos de entrada atuais. A recuperação externa não usa coordenadas nem reaproveita o planejador legado.
 
 ## Requisitos
 
@@ -75,17 +76,18 @@ Não há seleção implícita do primeiro emulador. Em modo ao vivo, `--frames` 
 .\.venv312\Scripts\python.exe -m src.gui.app
 ```
 
-A GUI descobre os dispositivos fora da thread do Tk e executa a mesma fundação `BotRuntime` em uma thread de trabalho. Quando há somente um dispositivo, ele é selecionado automaticamente e exibido com nome amigável (por exemplo, `MEmu · 127.0.0.1:21503`); com vários dispositivos, a seleção explícita continua obrigatória. Eventos são consumidos pela thread da interface. A descoberta e a sessão ADB da GUI usam timeout de inatividade de 5 segundos. O painel mostra duração e estabilidade da sessão, observações, transições, taxa de `UNKNOWN`, frames válidos, pretos descartados, recuperações, estratégia de captura e imagens salvas. Os arquivos JPEG e o `observations.jsonl` ficam numa pasta de sessão em `datasets/sessions/`; frames repetidos são deduplicados para limitar uso de disco. Pausa e automação ativa permanecem desabilitadas.
+A GUI descobre os dispositivos fora da thread do Tk e executa a mesma fundação `BotRuntime` em uma thread de trabalho. Quando há somente um dispositivo, ele é selecionado automaticamente e exibido com nome amigável (por exemplo, `MEmu · 127.0.0.1:21503`); com vários dispositivos, a seleção explícita continua obrigatória. Eventos são consumidos pela thread da interface. A descoberta e a sessão ADB da GUI usam timeout de inatividade de 5 segundos. O painel mostra duração e estabilidade da sessão, observações, transições, taxa de `UNKNOWN`, frames válidos, pretos descartados, recuperações, estratégia de captura, recuperação de aplicativo externo e imagens salvas. Os arquivos JPEG e o `observations.jsonl` ficam numa pasta de sessão em `datasets/sessions/`; frames repetidos são deduplicados para limitar uso de disco. Pausa e automação de gameplay permanecem desabilitadas.
 
 ## Limitações conhecidas
 
 - uma partida ADB real completa é reconhecida nas etapas `HOME`, `COLLECTION_MENU`, `WAIT_MATCHMAKING`, `DRAFT_SCREEN`, `COMBAT`, `ROUND_RESULT` e `VICTORY_SUMMARY`;
 - uma sessão real de navegação reconhece `SHOP_MENU`, `SHOP_DAILY_OFFERS`, `WATCHING_AD`, `AD_REWARD_GRANTED`, `LEAGUE_MENU`, `RANKED_LOCKED` e `PROFILE_MENU`;
 - anúncios com contador textual e anúncios com barra amarela são tratados como pendentes; somente a confirmação visual de recompensa ou o botão de encerramento liberado produz `safe_to_close=true`;
+- anúncios compostos (`Ad 1 of 2`, `Ad 2 of 2`) permanecem em espera; a recuperação não interrompe o anúncio enquanto o jogo continua sendo o aplicativo em primeiro plano;
 - a presença de ofertas/atualização por anúncio e do contador de renovação diária já é observável, mas a leitura numérica exata do tempo, troféus, moedas e níveis permanece marcada como `OCR_PENDING`;
 - recompensas especiais e algumas telas fora dos fluxos gravados ainda não possuem cobertura calibrada;
 - capturas reais podem permanecer em `UNKNOWN`, o que é esperado nesta fundação;
-- não há ainda OCR especializado, detector de cartas validado, decisão de draft, execução de ações, verificação de pós-condição ou recuperação automática;
+- não há ainda OCR especializado, detector de cartas validado, decisão de draft, execução de ações de gameplay ou verificação de pós-condição dessas ações; a única recuperação automática atual é o retorno seguro de aplicativos externos abertos durante anúncios;
 - replay demonstra determinismo e segurança estrutural, mas não substitui a validação controlada de captura ao vivo no MEmu.
 
 ## Próximas etapas fechadas
@@ -97,6 +99,6 @@ A automação ativa só poderá ser habilitada depois de gates separados e verif
 3. FSM e política de intenção que rejeitem `UNKNOWN` e baixa confiança;
 4. action gate e backend de entrada isolado, inicialmente em dry-run;
 5. confirmação por frame novo de cada pós-condição;
-6. supervisor com timeouts, recuperação limitada e parada segura.
+6. ampliar o supervisor já limitado a anúncios com pós-condições específicas para futuras ações de gameplay.
 
 Consulte a [arquitetura aprovada](docs/superpowers/specs/2026-08-13-draft-showdown-bot-architecture-design.md) e o [plano desta fundação](docs/superpowers/plans/2026-08-13-draft-showdown-safe-foundation.md) para os contratos completos.

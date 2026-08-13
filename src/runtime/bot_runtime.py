@@ -27,6 +27,10 @@ class FrameRecorder(Protocol):
     def close(self) -> None: ...
 
 
+class RecoverySupervisor(Protocol):
+    def after_observation(self, observation: Mapping[str, Any]) -> Mapping[str, Any] | None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeSettings:
     poll_interval_seconds: float = 0.25
@@ -56,6 +60,7 @@ class BotRuntime:
         cancellation: CancellationToken,
         settings: RuntimeSettings,
         recorder: FrameRecorder | None = None,
+        recovery: RecoverySupervisor | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._capture = capture
@@ -65,6 +70,7 @@ class BotRuntime:
         self._cancellation = cancellation
         self._settings = settings
         self._recorder = recorder
+        self._recovery = recovery
         self._recorder_failed = False
         self._clock = clock
         self._used = False
@@ -139,6 +145,8 @@ class BotRuntime:
             "capture_errors": int(health.operation_errors),
             "capture_failures": int(health.transient_failures),
             "capture_recoveries": int(health.recoveries),
+            "consecutive_capture_failures": int(health.consecutive_failures),
+            "capture_connection_resets": int(health.connection_resets),
             "capture_strategy": str(health.last_strategy),
         }
 
@@ -206,18 +214,22 @@ class BotRuntime:
                 try:
                     frame = self._capture.next_frame(CaptureRequest.fresh_required())
                 except CaptureTemporarilyUnavailable as exc:
+                    first_degraded_event = not capture_degraded
                     capture_degraded = True
-                    self._publish(
-                        self._event(
-                            EventKind.CAPTURE,
-                            {
-                                "status": "degraded",
-                                "attempts": exc.attempts,
-                                "blank_frames_in_cycle": exc.blank_frames,
-                                **self._capture_health_payload(),
-                            },
+                    health_payload = self._capture_health_payload()
+                    failure_count = int(health_payload.get("capture_failures", 0))
+                    if first_degraded_event or failure_count % 10 == 0:
+                        self._publish(
+                            self._event(
+                                EventKind.CAPTURE,
+                                {
+                                    "status": "degraded",
+                                    "attempts": exc.attempts,
+                                    "blank_frames_in_cycle": exc.blank_frames,
+                                    **health_payload,
+                                },
+                            )
                         )
-                    )
                     self._cancellation.wait(self._settings.capture_retry_seconds)
                     continue
                 self._cancellation.raise_if_cancelled()
@@ -253,6 +265,20 @@ class BotRuntime:
                 observation["frame_id"] = frame.id
                 self._cancellation.raise_if_cancelled()
                 self._publish(self._event(EventKind.OBSERVATION, observation))
+                if self._recovery is not None:
+                    try:
+                        recovery_result = self._recovery.after_observation(observation)
+                        if recovery_result is not None:
+                            self._publish(
+                                self._event(EventKind.RECOVERY, dict(recovery_result))
+                            )
+                    except Exception as recovery_error:
+                        self._publish(
+                            self._event(
+                                EventKind.RECOVERY,
+                                {"status": "error", "error": repr(recovery_error)},
+                            )
+                        )
                 self._record_frame(frame, observation)
                 processed += 1
                 if max_frames is None or processed < max_frames:

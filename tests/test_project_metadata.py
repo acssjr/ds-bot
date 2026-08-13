@@ -20,7 +20,9 @@ def test_project_metadata_matches_supported_runtime() -> None:
     pytest_options = metadata["tool"]["pytest"]["ini_options"]
 
     assert project["requires-python"] == ">=3.12,<3.13"
-    assert project["description"] == "Observe-only visual foundation for Draft Showdown"
+    assert project["description"] == (
+        "Observe-first visual foundation with bounded ad recovery for Draft Showdown"
+    )
     assert any(item.startswith("customtkinter") for item in project["dependencies"])
     assert pytest_options["testpaths"] == ["tests"]
     assert pytest_options["python_files"] == ["test_*.py"]
