@@ -26,11 +26,11 @@ No diretório raiz do clone:
 
 ```powershell
 uv python install 3.12
-uv venv .venv312 --python 3.12
-uv pip install --python .venv312\Scripts\python.exe -e ".[dev]"
+$env:UV_PROJECT_ENVIRONMENT = ".venv312"
+uv sync --locked --extra dev
 ```
 
-O arquivo `uv.lock` fixa as versões resolvidas. Esta fundação não promete que um wheel publicado contenha os assets; os comandos documentados pressupõem o clone e a instalação editável acima.
+`uv sync --locked` consome o `uv.lock` sem atualizá-lo e instala o projeto de forma editável em `.venv312`, preservando uma eventual `.venv` antiga. Esta fundação não promete que um wheel publicado contenha os assets; os comandos documentados pressupõem o clone e a instalação editável acima.
 
 ## Testes
 
@@ -51,11 +51,13 @@ As capturas feitas manualmente em `screenshots/` são referências das telas e d
 
 ## CLI: observação ao vivo no MEmu
 
-Primeiro confirme o número de série exposto pelo MEmu:
+Se o executável `adb` estiver disponível no `PATH`, confirme o número de série exposto pelo MEmu:
 
 ```powershell
 adb devices
 ```
+
+Esse comando pertence ao Android SDK Platform Tools ou à distribuição ADB do MEmu; ele não é instalado por este projeto. Se não houver um `adb` de linha de comando no `PATH`, abra a GUI abaixo e use **Atualizar lista**: ela consulta o servidor ADB ativo diretamente com `adbutils` e mostra os seriais disponíveis. O ADB do MEmu ainda precisa estar habilitado e seu servidor acessível.
 
 Depois informe exatamente esse serial, por exemplo:
 

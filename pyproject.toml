@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "draft-showdown-bot"
 version = "0.2.0"
-description = "Closed-loop visual automation for Draft Showdown"
+description = "Observe-only visual foundation for Draft Showdown"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -26,6 +26,11 @@ dev = [
 
 [project.scripts]
 draft-showdown-bot = "src.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src", "src.*"]
+namespaces = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,5 +1,6 @@
 import numpy as np
 
+from src.actions.action_model import ActionType
 from src.actions.action_planner import ActionPlanner
 from src.state.game_state import ScreenState
 from src.state.state_manager import StateManager
@@ -41,4 +42,6 @@ def test_reward_policy_keeps_existing_user_choice() -> None:
         watch_ads=True,
     )
 
+    assert action.action_type is ActionType.TAP
+    assert action.normalized_start == ActionPlanner.POSITIONS["CONTINUAR_BROWN_BTN"]
     assert "Continuar" in action.metadata
