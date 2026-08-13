@@ -76,7 +76,7 @@ Não há seleção implícita do primeiro emulador. Em modo ao vivo, `--frames` 
 .\.venv312\Scripts\python.exe -m src.gui.app
 ```
 
-A GUI descobre os dispositivos fora da thread do Tk e executa a mesma fundação `BotRuntime` em uma thread de trabalho. Quando há somente um dispositivo, ele é selecionado automaticamente e exibido com nome amigável (por exemplo, `MEmu · 127.0.0.1:21503`); com vários dispositivos, a seleção explícita continua obrigatória. Eventos são consumidos pela thread da interface. A descoberta e a sessão ADB da GUI usam timeout de inatividade de 5 segundos. O painel mostra duração e estabilidade da sessão, observações, transições, taxa de `UNKNOWN`, frames válidos, pretos descartados, recuperações, estratégia de captura, recuperação de aplicativo externo e imagens salvas. Os arquivos JPEG e o `observations.jsonl` ficam numa pasta de sessão em `datasets/sessions/`; frames repetidos são deduplicados para limitar uso de disco. Pausa e automação de gameplay permanecem desabilitadas.
+A GUI descobre os dispositivos fora da thread do Tk e executa a mesma fundação `BotRuntime` em uma thread de trabalho. Quando há somente um dispositivo, ele é selecionado automaticamente e exibido com nome amigável (por exemplo, `MEmu · 127.0.0.1:21503`); com vários dispositivos, a seleção explícita continua obrigatória. Eventos são consumidos pela thread da interface. A descoberta e a sessão ADB da GUI usam timeout de inatividade de 5 segundos. O painel mostra duração e estabilidade da sessão, observações, transições, taxa de `UNKNOWN`, frames válidos, pretos descartados, recuperações, estratégia de captura, recuperação de aplicativo externo, imagens salvas e o último retrato confiável dos recursos da conta. Energia, gemas, moedas, moeda de maestria, troféus e nível são lidos em regiões específicas; Coleção e Liga recebem uma leitura detalhada ao entrar na respectiva tela. O retrato validado sobrevive a reinícios em `datasets/account_state.json`. Os arquivos JPEG e o `observations.jsonl` ficam numa pasta de sessão em `datasets/sessions/`; frames repetidos são deduplicados para limitar uso de disco. Pausa e automação de gameplay permanecem desabilitadas.
 
 ## Limitações conhecidas
 
@@ -84,10 +84,10 @@ A GUI descobre os dispositivos fora da thread do Tk e executa a mesma fundação
 - uma sessão real de navegação reconhece `SHOP_MENU`, `SHOP_DAILY_OFFERS`, `WATCHING_AD`, `AD_REWARD_GRANTED`, `LEAGUE_MENU`, `RANKED_LOCKED` e `PROFILE_MENU`;
 - anúncios com contador textual e anúncios com barra amarela são tratados como pendentes; somente a confirmação visual de recompensa ou o botão de encerramento liberado produz `safe_to_close=true`;
 - anúncios compostos (`Ad 1 of 2`, `Ad 2 of 2`) permanecem em espera; a recuperação não interrompe o anúncio enquanto o jogo continua sendo o aplicativo em primeiro plano;
-- a presença de ofertas/atualização por anúncio e do contador de renovação diária já é observável, mas a leitura numérica exata do tempo, troféus, moedas e níveis permanece marcada como `OCR_PENDING`;
+- a presença de ofertas/atualização por anúncio e do contador de renovação diária já é observável; recursos da conta, troféus, nível, posição/pontos da Liga e unidades visíveis da Coleção possuem OCR especializado, enquanto temporizadores de ofertas/anúncios continuam `OCR_PENDING`;
 - recompensas especiais e algumas telas fora dos fluxos gravados ainda não possuem cobertura calibrada;
 - capturas reais podem permanecer em `UNKNOWN`, o que é esperado nesta fundação;
-- não há ainda OCR especializado, detector de cartas validado, decisão de draft, execução de ações de gameplay ou verificação de pós-condição dessas ações; a única recuperação automática atual é o retorno seguro de aplicativos externos abertos durante anúncios;
+- ainda não há detector de cartas validado, decisão de draft, execução de ações de gameplay ou verificação de pós-condição dessas ações; a única recuperação automática atual é o retorno seguro de aplicativos externos abertos durante anúncios;
 - replay demonstra determinismo e segurança estrutural, mas não substitui a validação controlada de captura ao vivo no MEmu.
 
 ## Próximas etapas fechadas

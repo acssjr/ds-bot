@@ -279,7 +279,7 @@ class DraftShowdownGUI(ctk.CTk):
         self.tabview = ctk.CTkTabview(self, corner_radius=10)
         self.tabview.pack(fill="both", expand=True, padx=15, pady=(0, 10))
         self.tab_observation = self.tabview.add("Observação")
-        self.tab_future = self.tabview.add("Recursos futuros")
+        self.tab_future = self.tabview.add("Recursos")
 
         self._build_observation_tab()
         self._build_future_tab()
@@ -333,20 +333,48 @@ class DraftShowdownGUI(ctk.CTk):
         panel.pack(fill="both", expand=True, padx=10, pady=10)
         ctk.CTkLabel(
             panel,
-            text="AUTOMAÇÃO DESABILITADA",
+            text="RECURSOS DA CONTA",
             font=ctk.CTkFont(size=18, weight="bold"),
-            text_color="#F9A825",
+            text_color="#81C784",
         ).pack(anchor="w", padx=18, pady=(18, 8))
+        self.lbl_resources_primary = ctk.CTkLabel(
+            panel,
+            text="Energia: -/- | Gemas: - | Moedas: - | Maestria: - M",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            justify="left",
+            wraplength=760,
+        )
+        self.lbl_resources_primary.pack(anchor="w", padx=18, pady=8)
+        self.lbl_resources_progress = ctk.CTkLabel(
+            panel,
+            text="Troféus: - | Nível: - | Liga: - | Posição: - | Pontos: -",
+            justify="left",
+            wraplength=900,
+        )
+        self.lbl_resources_progress.pack(anchor="w", padx=18, pady=8)
+        self.lbl_resources_collection = ctk.CTkLabel(
+            panel,
+            text="Coleção: aguardando visita à tela | Unidades visíveis: -",
+            justify="left",
+            wraplength=900,
+        )
+        self.lbl_resources_collection.pack(anchor="w", padx=18, pady=8)
+        self.lbl_resources_status = ctk.CTkLabel(
+            panel,
+            text="OCR: aguardando primeira leitura confiável",
+            text_color="#A9B7C6",
+        )
+        self.lbl_resources_status.pack(anchor="w", padx=18, pady=(8, 18))
         ctk.CTkLabel(
             panel,
             text=(
-                "Estratégia de draft, posicionamento e coleta de recompensas serão "
-                "habilitados apenas depois das etapas de percepção, verificação de "
-                "pós-condição e recuperação. A interface observa; somente anúncios "
-                "que abrem outro aplicativo permitem Voltar/reabrir o jogo."
+                "Os valores são lidos de regiões específicas da imagem e o último valor "
+                "confiável é preservado durante batalha e transições. Automação de gastos, "
+                "impulsos e upgrades continua bloqueada até haver política e pós-condição."
             ),
             justify="left",
-            wraplength=760,
+            wraplength=900,
+            text_color="#FFE082",
         ).pack(anchor="w", padx=18, pady=8)
 
     def _setup_logging(self) -> None:
@@ -527,6 +555,7 @@ class DraftShowdownGUI(ctk.CTk):
             self.lbl_current_state.configure(text=observation)
             self._update_context_details(event)
             self._update_observation_metrics(event)
+            self._update_resource_details(event)
             return
 
         if event.kind is EventKind.FRAME:
@@ -643,6 +672,53 @@ class DraftShowdownGUI(ctk.CTk):
                 f"Transições: {self._screen_transitions} | UNKNOWN: {self._unknown_total} "
                 f"({unknown_rate:.1%}) | Tela estável: {max(0.0, now - stable_since):.1f}s"
             )
+        )
+
+    def _update_resource_details(self, event: RuntimeEvent) -> None:
+        resources = event.payload.get("resources")
+        if not isinstance(resources, dict) and not hasattr(resources, "get"):
+            return
+
+        def value(name: str, default: object = "-") -> object:
+            raw = resources.get(name, default)
+            return default if raw is None else raw
+
+        self.lbl_resources_primary.configure(
+            text=(
+                f"Energia: {value('energy_current')}/{value('energy_capacity')} | "
+                f"Gemas: {value('gems')} | Moedas: {value('coins')} | "
+                f"Maestria: {value('mastery_currency')} M"
+            )
+        )
+        rank = value("league_rank")
+        rank_text = f"#{rank}" if rank != "-" else "-"
+        self.lbl_resources_progress.configure(
+            text=(
+                f"Troféus: {value('trophies')} | Nível: {value('player_level')} | "
+                f"Liga: {value('league')} | Posição: {rank_text} | "
+                f"Pontos: {value('league_points')} | Termina: {value('league_ends')}"
+            )
+        )
+        units = resources.get("units", ())
+        unit_text = ", ".join(
+            (
+                f"{unit.get('name', '?')} Nv.{unit.get('level', '?')}"
+                + (f" / M.{unit.get('mastery')}" if unit.get("mastery") is not None else "")
+            )
+            for unit in units
+            if hasattr(unit, "get")
+        ) or "-"
+        self.lbl_resources_collection.configure(
+            text=(
+                f"Coleção: {value('collection_unlocked')}/{value('collection_total')} | "
+                f"Unidades visíveis: {unit_text}"
+            )
+        )
+        confidence = resources.get("resource_confidence")
+        confidence_text = f" | confiança mínima {float(confidence):.0%}" if confidence is not None else ""
+        status = str(event.payload.get("resource_ocr_status") or "cached")
+        self.lbl_resources_status.configure(
+            text=f"OCR: {'leitura nova' if status == 'fresh' else 'último valor confiável'}{confidence_text}"
         )
 
     def _update_context_details(self, event: RuntimeEvent) -> None:

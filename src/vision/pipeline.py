@@ -6,16 +6,23 @@ from src.vision.classifiers.screen_classifier import ScreenClassifier
 from src.vision.context_analyzer import ContextAnalyzer
 from src.core.cancellation import CancellationToken
 from src.state.game_state import ScreenState
+from src.vision.resource_reader import ResourceReader
 
 class VisionPipeline:
     """Orquestra a análise visual do frame combinando classificação de tela e sub-detectores."""
 
-    def __init__(self, templates_dir: str = "assets/templates"):
+    def __init__(
+        self,
+        templates_dir: str = "assets/templates",
+        *,
+        resource_reader: ResourceReader | None = None,
+    ):
         self.screen_classifier = ScreenClassifier(templates_dir=templates_dir)
         self.context_analyzer = ContextAnalyzer(templates_dir)
         self._last_screen = ScreenState.UNKNOWN
         self._last_confidence = 0.0
         self._unknown_streak = 0
+        self.resource_reader = resource_reader
 
     _STICKY_SCREENS = {
         ScreenState.SHOP_MENU,
@@ -71,4 +78,7 @@ class VisionPipeline:
             "frame_shape": frame.shape
         }
         result.update(self.context_analyzer.analyze(frame, screen_state, sub_element))
+        resource_reader = getattr(self, "resource_reader", None)
+        if resource_reader is not None:
+            result.update(resource_reader.analyze(frame, screen_state))
         return result

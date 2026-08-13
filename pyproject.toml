@@ -13,9 +13,11 @@ dependencies = [
     "customtkinter>=5.2,<6",
     "loguru>=0.7,<1",
     "numpy>=2,<3",
+    "onnxruntime>=1.28,<2",
     "opencv-python>=4.10,<5",
     "pillow>=10,<13",
     "pydantic>=2.8,<3",
+    "rapidocr>=3.9,<4",
 ]
 
 [project.optional-dependencies]

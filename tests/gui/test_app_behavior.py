@@ -163,6 +163,10 @@ def make_headless_gui(
     gui.lbl_session_state = FakeWidget("session", timeline=timeline)
     gui.lbl_capture_state = FakeWidget("capture", timeline=timeline)
     gui.lbl_dataset_state = FakeWidget("dataset", timeline=timeline)
+    gui.lbl_resources_primary = FakeWidget("resources-primary", timeline=timeline)
+    gui.lbl_resources_progress = FakeWidget("resources-progress", timeline=timeline)
+    gui.lbl_resources_collection = FakeWidget("resources-collection", timeline=timeline)
+    gui.lbl_resources_status = FakeWidget("resources-status", timeline=timeline)
     gui.after = lambda *_args, **_kwargs: None
     return gui
 
@@ -292,6 +296,44 @@ def test_observation_panel_reports_session_coverage_and_transitions() -> None:
     assert "Observações: 2" in text
     assert "Transições: 1" in text
     assert "UNKNOWN: 1 (50.0%)" in text
+
+
+def test_observation_updates_persistent_account_resources() -> None:
+    gui = make_headless_gui()
+
+    gui._apply_runtime_event(
+        RuntimeEvent(
+            EventKind.OBSERVATION,
+            1.0,
+            {
+                "screen": "HOME",
+                "confidence": 0.99,
+                "resource_ocr_status": "fresh",
+                "resources": {
+                    "energy_current": 140,
+                    "energy_capacity": 150,
+                    "gems": 125,
+                    "coins": 3578,
+                    "mastery_currency": 26,
+                    "trophies": 489,
+                    "player_level": 6,
+                    "league": "Bronze",
+                    "league_rank": 4,
+                    "league_points": 108,
+                    "collection_unlocked": 9,
+                    "collection_total": 25,
+                    "units": ({"name": "Cavaleiro", "level": 3},),
+                    "resource_confidence": 0.98,
+                },
+            },
+        )
+    )
+
+    assert "Energia: 140/150" in str(gui.lbl_resources_primary.options["text"])
+    assert "Maestria: 26 M" in str(gui.lbl_resources_primary.options["text"])
+    assert "Troféus: 489" in str(gui.lbl_resources_progress.options["text"])
+    assert "Posição: #4" in str(gui.lbl_resources_progress.options["text"])
+    assert "Cavaleiro Nv.3" in str(gui.lbl_resources_collection.options["text"])
 
 
 def test_ad_context_never_presents_pending_reward_as_safe_to_close() -> None:

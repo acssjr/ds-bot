@@ -8,6 +8,7 @@ from typing import Any
 from src.state.game_state import ScreenState
 from src.core.cancellation import CancellationToken
 from src.vision.pipeline import VisionPipeline
+from src.vision.resource_reader import ResourceReader
 
 
 class LegacyVisionAdapter:
@@ -22,7 +23,10 @@ class LegacyVisionAdapter:
         resolved = Path(templates_dir).expanduser().resolve()
         if not resolved.is_dir():
             raise FileNotFoundError(f"templates directory does not exist: {resolved}")
-        self._pipeline = VisionPipeline(templates_dir=str(resolved))
+        self._pipeline = VisionPipeline(
+            templates_dir=str(resolved),
+            resource_reader=ResourceReader(state_path="datasets/account_state.json"),
+        )
 
     @staticmethod
     def _pipeline_from_packaged_templates() -> VisionPipeline:
@@ -42,7 +46,10 @@ class LegacyVisionAdapter:
                 raise FileNotFoundError(
                     "packaged templates directory could not be materialized"
                 )
-            return VisionPipeline(templates_dir=str(materialized))
+            return VisionPipeline(
+                templates_dir=str(materialized),
+                resource_reader=ResourceReader(state_path="datasets/account_state.json"),
+            )
 
     def analyze(self, image, *, cancellation: CancellationToken | None = None) -> dict[str, Any]:
         if cancellation is not None:
