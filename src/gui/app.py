@@ -479,9 +479,6 @@ class DraftShowdownGUI(ctk.CTk):
         self.btn_stop.configure(state="disabled")
         self._update_controls()
 
-    def _worker_is_active(self) -> bool:
-        return self._bot_thread is not None and self._bot_thread.is_alive()
-
     def _reap_worker(self, events: EventBus | None) -> None:
         worker = self._bot_thread
         if worker is None or worker.is_alive():
