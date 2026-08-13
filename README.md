@@ -75,7 +75,7 @@ Não há seleção implícita do primeiro emulador. Em modo ao vivo, `--frames` 
 .\.venv312\Scripts\python.exe -m src.gui.app
 ```
 
-A GUI descobre os dispositivos fora da thread do Tk, exige a escolha explícita de um serial e executa a mesma fundação `BotRuntime` em uma thread de trabalho. Eventos são consumidos pela thread da interface. A descoberta e a sessão ADB da GUI usam timeout de inatividade de 5 segundos. O painel mostra frames válidos, pretos descartados, estratégia de captura e imagens salvas. Os arquivos JPEG e o `observations.jsonl` ficam numa pasta de sessão em `datasets/sessions/`; frames repetidos são deduplicados para limitar uso de disco. Pausa e automação ativa permanecem desabilitadas.
+A GUI descobre os dispositivos fora da thread do Tk e executa a mesma fundação `BotRuntime` em uma thread de trabalho. Quando há somente um dispositivo, ele é selecionado automaticamente e exibido com nome amigável (por exemplo, `MEmu · 127.0.0.1:21503`); com vários dispositivos, a seleção explícita continua obrigatória. Eventos são consumidos pela thread da interface. A descoberta e a sessão ADB da GUI usam timeout de inatividade de 5 segundos. O painel mostra duração e estabilidade da sessão, observações, transições, taxa de `UNKNOWN`, frames válidos, pretos descartados, recuperações, estratégia de captura e imagens salvas. Os arquivos JPEG e o `observations.jsonl` ficam numa pasta de sessão em `datasets/sessions/`; frames repetidos são deduplicados para limitar uso de disco. Pausa e automação ativa permanecem desabilitadas.
 
 ## Limitações conhecidas
 

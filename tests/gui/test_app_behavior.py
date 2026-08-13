@@ -130,6 +130,7 @@ def make_headless_gui(
     gui._closing = False
     gui.is_running = True
     gui._available_serials = ("emulator-1",)
+    gui._serial_by_label = {"emulator-1": "emulator-1"}
     gui._runtime_events = events
     gui._cancellation = cancellation
     gui._thread_factory = gui_app.threading.Thread
@@ -140,6 +141,14 @@ def make_headless_gui(
     gui._last_lifecycle_status = None
     gui._last_error_text = None
     gui._reported_dropped_events = 0
+    gui._dataset_saved_count = 0
+    gui._dataset_session_directory = "-"
+    gui._session_started_at = None
+    gui._observations_total = 0
+    gui._unknown_total = 0
+    gui._screen_transitions = 0
+    gui._current_screen = None
+    gui._current_screen_since = None
     gui._clock = gui_app.time.monotonic
     gui._close_deadline = None
     gui._close_finalized = False
@@ -150,6 +159,9 @@ def make_headless_gui(
     gui.btn_stop = FakeWidget("stop", timeline=timeline)
     gui.btn_refresh = FakeWidget("refresh", timeline=timeline)
     gui.lbl_current_state = FakeWidget("observation", timeline=timeline)
+    gui.lbl_session_state = FakeWidget("session", timeline=timeline)
+    gui.lbl_capture_state = FakeWidget("capture", timeline=timeline)
+    gui.lbl_dataset_state = FakeWidget("dataset", timeline=timeline)
     gui.after = lambda *_args, **_kwargs: None
     return gui
 
@@ -263,6 +275,23 @@ def test_log_poller_caps_textbox_history_and_does_not_scroll_when_empty() -> Non
     assert gui.log_textbox.see_calls == 1
 
 
+def test_observation_panel_reports_session_coverage_and_transitions() -> None:
+    gui = make_headless_gui()
+    gui._clock = iter([10.0, 12.5]).__next__
+    gui._session_started_at = 9.0
+
+    gui._apply_runtime_event(
+        RuntimeEvent(EventKind.OBSERVATION, 1.0, {"screen": "HOME", "confidence": 0.9})
+    )
+    gui._apply_runtime_event(
+        RuntimeEvent(EventKind.OBSERVATION, 2.0, {"screen": "UNKNOWN", "confidence": 0.1})
+    )
+
+    text = str(gui.lbl_session_state.options["text"])
+    assert "Observações: 2" in text
+    assert "Transições: 1" in text
+    assert "UNKNOWN: 1 (50.0%)" in text
+
 def test_runtime_failure_is_not_duplicated_by_gui_worker() -> None:
     events = EventBus(capacity=16)
     cancellation = CancellationToken()
@@ -361,28 +390,39 @@ def test_discovery_thread_start_failure_restores_controls() -> None:
     assert gui.btn_refresh.options["state"] == "normal"
 
 
-@pytest.mark.parametrize(
-    "serials",
-    [("emulator-1",), ("emulator-1", "emulator-2")],
-)
-def test_discovery_requires_human_device_selection(serials: tuple[str, ...]) -> None:
+def test_discovery_auto_selects_the_only_available_device() -> None:
     gui = make_headless_gui()
     gui.is_running = False
     gui._available_serials = ()
     gui._discovery_results.put_nowait(
-        gui_app.DeviceDiscoveryResult(serials=serials)
+        gui_app.DeviceDiscoveryResult(
+            serials=("127.0.0.1:21503",),
+            labels=("MEmu · 127.0.0.1:21503",),
+        )
     )
 
     gui._process_discovery_results()
 
-    assert gui._available_serials == serials
+    assert gui._available_serials == ("127.0.0.1:21503",)
     assert gui.device_option.options["values"] == [
         gui_app.DEVICE_SELECTION_PLACEHOLDER,
-        *serials,
+        "MEmu · 127.0.0.1:21503",
     ]
+    assert gui.device_option.value == "MEmu · 127.0.0.1:21503"
+    assert gui.btn_start.options["state"] == "normal"
+
+
+def test_discovery_keeps_explicit_selection_when_multiple_devices_exist() -> None:
+    gui = make_headless_gui()
+    gui.is_running = False
+    gui._available_serials = ()
+    serials = ("emulator-1", "emulator-2")
+    gui._discovery_results.put_nowait(gui_app.DeviceDiscoveryResult(serials=serials))
+
+    gui._process_discovery_results()
+
     assert gui.device_option.value == gui_app.DEVICE_SELECTION_PLACEHOLDER
     assert gui.btn_start.options["state"] == "disabled"
-
     gui.device_option.set(serials[-1])
     gui._on_device_selected(serials[-1])
 

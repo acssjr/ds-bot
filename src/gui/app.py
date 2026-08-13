@@ -39,6 +39,7 @@ CLOSE_TIMEOUT_SECONDS = ADB_SOCKET_TIMEOUT_SECONDS + 1.0
 @dataclass(frozen=True, slots=True)
 class DeviceDiscoveryResult:
     serials: tuple[str, ...] = ()
+    labels: tuple[str, ...] = ()
     error: str | None = None
 
 
@@ -65,6 +66,13 @@ class BoundedTextSink:
         _put_latest(self._target, str(message))
 
 
+def _friendly_device_label(serial: str) -> str:
+    host, separator, port = serial.rpartition(":")
+    if separator and host in {"127.0.0.1", "localhost"} and port.startswith("215"):
+        return f"MEmu · {serial}"
+    return f"Android · {serial}"
+
+
 def discover_adb_serials() -> tuple[str, ...]:
     """Discover ADB devices with a finite socket timeout, outside the Tk thread."""
     client = adbutils.AdbClient(socket_timeout=5.0)
@@ -73,7 +81,11 @@ def discover_adb_serials() -> tuple[str, ...]:
 
 def run_device_discovery(results: queue.Queue[DeviceDiscoveryResult]) -> None:
     try:
-        result = DeviceDiscoveryResult(serials=discover_adb_serials())
+        serials = discover_adb_serials()
+        result = DeviceDiscoveryResult(
+            serials=serials,
+            labels=tuple(_friendly_device_label(serial) for serial in serials),
+        )
     except Exception as exc:
         result = DeviceDiscoveryResult(error=repr(exc))
     _put_latest(results, result)
@@ -147,6 +159,7 @@ class DraftShowdownGUI(ctk.CTk):
         self._clock = time.monotonic
         self.is_running = False
         self._available_serials: tuple[str, ...] = ()
+        self._serial_by_label: dict[str, str] = {}
         self._runtime_events: EventBus | None = None
         self._cancellation: CancellationToken | None = None
         self._thread_factory = threading.Thread
@@ -163,6 +176,13 @@ class DraftShowdownGUI(ctk.CTk):
         self._last_error_text: str | None = None
         self._reported_dropped_events = 0
         self._dataset_saved_count = 0
+        self._dataset_session_directory = "-"
+        self._session_started_at: float | None = None
+        self._observations_total = 0
+        self._unknown_total = 0
+        self._screen_transitions = 0
+        self._current_screen: str | None = None
+        self._current_screen_since: float | None = None
 
         self._build_ui()
         self._setup_logging()
@@ -271,12 +291,24 @@ class DraftShowdownGUI(ctk.CTk):
             font=ctk.CTkFont(size=14, weight="bold"),
         )
         self.lbl_current_state.pack(anchor="w", padx=15, pady=10)
+        self.lbl_session_state = ctk.CTkLabel(
+            state_frame,
+            text="Sessão: - | Observações: 0 | Transições: 0 | UNKNOWN: 0",
+            text_color="#D6DEE6",
+        )
+        self.lbl_session_state.pack(anchor="w", padx=15, pady=(0, 6))
         self.lbl_capture_state = ctk.CTkLabel(
             state_frame,
-            text="Captura: aguardando | Pretos descartados: 0 | Dataset: 0 imagens",
+            text="Captura: aguardando | Válidos: 0 | Pretos descartados: 0",
             text_color="#A9B7C6",
         )
-        self.lbl_capture_state.pack(anchor="w", padx=15, pady=(0, 10))
+        self.lbl_capture_state.pack(anchor="w", padx=15, pady=(0, 6))
+        self.lbl_dataset_state = ctk.CTkLabel(
+            state_frame,
+            text="Dataset: 0 imagens | Pasta: será criada na primeira captura útil",
+            text_color="#A9B7C6",
+        )
+        self.lbl_dataset_state.pack(anchor="w", padx=15, pady=(0, 10))
 
         ctk.CTkLabel(
             self.tab_observation,
@@ -326,6 +358,7 @@ class DraftShowdownGUI(ctk.CTk):
             return
 
         self._available_serials = ()
+        self._serial_by_label = {}
         self.device_option.configure(values=["Buscando dispositivos..."])
         self.device_option.set("Buscando dispositivos...")
         self.btn_start.configure(state="disabled")
@@ -363,13 +396,18 @@ class DraftShowdownGUI(ctk.CTk):
                 values = ["ADB indisponível"]
                 self._available_serials = ()
             elif result.serials:
-                values = [DEVICE_SELECTION_PLACEHOLDER, *result.serials]
                 self._available_serials = result.serials
+                labels = result.labels if len(result.labels) == len(result.serials) else result.serials
+                self._serial_by_label = dict(zip(labels, result.serials, strict=True))
+                values = [DEVICE_SELECTION_PLACEHOLDER, *labels]
             else:
                 values = ["Nenhum dispositivo ADB"]
                 self._available_serials = ()
             self.device_option.configure(values=values)
-            if result.serials:
+            if len(result.serials) == 1:
+                self.device_option.set(values[1])
+                logger.info("Único dispositivo ADB selecionado automaticamente: {}", values[1])
+            elif result.serials:
                 self.device_option.set(DEVICE_SELECTION_PLACEHOLDER)
             else:
                 self.device_option.set(values[0])
@@ -385,7 +423,8 @@ class DraftShowdownGUI(ctk.CTk):
         if self._closing or self.is_running or self._bot_thread is not None:
             return
 
-        serial = self.device_option.get().strip()
+        selected_device = self.device_option.get().strip()
+        serial = self._serial_by_label.get(selected_device, selected_device)
         if serial not in self._available_serials:
             logger.error("Selecione explicitamente um dispositivo ADB disponível.")
             return
@@ -399,6 +438,13 @@ class DraftShowdownGUI(ctk.CTk):
         self._last_error_text = None
         self._reported_dropped_events = 0
         self._dataset_saved_count = 0
+        self._dataset_session_directory = "-"
+        self._session_started_at = self._clock()
+        self._observations_total = 0
+        self._unknown_total = 0
+        self._screen_transitions = 0
+        self._current_screen = None
+        self._current_screen_since = None
         self.is_running = True
 
         self.status_badge.configure(text="🟠 INICIANDO", fg_color="#E65100")
@@ -471,6 +517,7 @@ class DraftShowdownGUI(ctk.CTk):
         observation = format_runtime_event(event)
         if observation is not None:
             self.lbl_current_state.configure(text=observation)
+            self._update_observation_metrics(event)
             return
 
         if event.kind is EventKind.FRAME:
@@ -479,7 +526,7 @@ class DraftShowdownGUI(ctk.CTk):
                     f"Captura: {event.payload.get('capture_strategy', '-')} | "
                     f"Válidos: {event.payload.get('valid_frames', 0)} | "
                     f"Pretos descartados: {event.payload.get('blank_frames', 0)} | "
-                    f"Dataset: {self._dataset_saved_count} imagens"
+                    f"Recuperações: {event.payload.get('capture_recoveries', 0)}"
                 ),
                 text_color="#A9B7C6",
             )
@@ -492,7 +539,7 @@ class DraftShowdownGUI(ctk.CTk):
                     f"Captura: {'instável, tentando novamente' if degraded else 'recuperada'} | "
                     f"Válidos: {event.payload.get('valid_frames', 0)} | "
                     f"Pretos descartados: {event.payload.get('blank_frames', 0)} | "
-                    f"Dataset: {self._dataset_saved_count} imagens"
+                    f"Falhas transitórias: {event.payload.get('capture_failures', 0)}"
                 ),
                 text_color="#FFB74D" if degraded else "#81C784",
             )
@@ -501,6 +548,14 @@ class DraftShowdownGUI(ctk.CTk):
         if event.kind is EventKind.DATASET:
             if event.payload.get("status") == "saved":
                 self._dataset_saved_count = int(event.payload.get("saved_count", 0))
+                self._dataset_session_directory = str(event.payload.get("session_directory") or "-")
+                session_name = self._dataset_session_directory.replace("\\", "/").rstrip("/").split("/")[-1]
+                self.lbl_dataset_state.configure(
+                    text=(
+                        f"Dataset: {self._dataset_saved_count} imagens | "
+                        f"Último motivo: {event.payload.get('reason', '-')} | Sessão: {session_name}"
+                    )
+                )
                 logger.info(
                     "Dataset: frame útil {} salvo ({})",
                     self._dataset_saved_count,
@@ -537,6 +592,32 @@ class DraftShowdownGUI(ctk.CTk):
         self.status_badge.configure(text="🔴 FALHA", fg_color="#A91B0D")
         self.btn_stop.configure(state="disabled")
         self._update_controls()
+
+    def _update_observation_metrics(self, event: RuntimeEvent) -> None:
+        now = self._clock()
+        screen = str(event.payload.get("screen") or "UNKNOWN")
+        self._observations_total += 1
+        if screen == "UNKNOWN":
+            self._unknown_total += 1
+        if self._current_screen is None:
+            self._current_screen = screen
+            self._current_screen_since = now
+        elif screen != self._current_screen:
+            self._screen_transitions += 1
+            self._current_screen = screen
+            self._current_screen_since = now
+        started = self._session_started_at if self._session_started_at is not None else now
+        stable_since = self._current_screen_since if self._current_screen_since is not None else now
+        elapsed = max(0, round(now - started))
+        minutes, seconds = divmod(elapsed, 60)
+        unknown_rate = self._unknown_total / self._observations_total
+        self.lbl_session_state.configure(
+            text=(
+                f"Sessão: {minutes:02d}:{seconds:02d} | Observações: {self._observations_total} | "
+                f"Transições: {self._screen_transitions} | UNKNOWN: {self._unknown_total} "
+                f"({unknown_rate:.1%}) | Tela estável: {max(0.0, now - stable_since):.1f}s"
+            )
+        )
 
     def _reap_worker(self, events: EventBus | None) -> None:
         worker = self._bot_thread
@@ -577,7 +658,9 @@ class DraftShowdownGUI(ctk.CTk):
             not self._closing
             and not self.is_running
             and self._bot_thread is None
-            and self.device_option.get().strip() in self._available_serials
+            and self._serial_by_label.get(
+                self.device_option.get().strip(), self.device_option.get().strip()
+            ) in self._available_serials
         )
         self.btn_start.configure(state="normal" if can_start else "disabled")
         self.btn_pause.configure(state="disabled")
