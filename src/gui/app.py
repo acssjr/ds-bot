@@ -3,6 +3,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import adbutils
@@ -28,6 +29,7 @@ EVENT_POLL_MS = 100
 LOG_POLL_MS = 150
 DISCOVERY_POLL_MS = 100
 ADB_SOCKET_TIMEOUT_SECONDS = 5.0
+MAX_LOG_LINES = 2000
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,37 +79,51 @@ def run_observer_worker(
     serial: str,
     cancellation: CancellationToken,
     events: EventBus,
+    *,
+    runtime_factory: Callable[[str, CancellationToken, EventBus], BotRuntime]
+    | None = None,
 ) -> None:
     """Assemble and run one observe-only session without touching Tk state."""
     try:
-        session = DeviceSession(serial, timeout_seconds=ADB_SOCKET_TIMEOUT_SECONDS)
-        source = ADBCaptureSource(session)
-        capture = CaptureManager(
-            source,
-            device_serial=session.serial,
-            connection_generation=lambda: session.connection_generation,
-        )
-        runtime = BotRuntime(
-            capture=capture,
-            perception=LegacyVisionAdapter(),
-            events=events,
-            lifecycle=Lifecycle(),
-            cancellation=cancellation,
-            settings=RuntimeSettings(0.25),
-        )
-        logger.warning(
-            "GUI em modo SOMENTE OBSERVAÇÃO; nenhuma ação será enviada."
-        )
-        runtime.run()
+        if runtime_factory is None:
+            session = DeviceSession(
+                serial,
+                timeout_seconds=ADB_SOCKET_TIMEOUT_SECONDS,
+            )
+            source = ADBCaptureSource(session)
+            capture = CaptureManager(
+                source,
+                device_serial=session.serial,
+                connection_generation=lambda: session.connection_generation,
+            )
+            runtime = BotRuntime(
+                capture=capture,
+                perception=LegacyVisionAdapter(),
+                events=events,
+                lifecycle=Lifecycle(),
+                cancellation=cancellation,
+                settings=RuntimeSettings(0.25),
+            )
+        else:
+            runtime = runtime_factory(serial, cancellation, events)
     except Exception as exc:
-        logger.exception("Falha no runtime de observação")
         events.publish(
             RuntimeEvent(
                 EventKind.ERROR,
                 time.monotonic(),
-                {"phase": "gui-worker", "error": repr(exc)},
+                {"phase": "gui-setup", "error": repr(exc)},
             )
         )
+        return
+
+    logger.warning(
+        "GUI em modo SOMENTE OBSERVAÇÃO; nenhuma ação será enviada."
+    )
+    try:
+        runtime.run()
+    except Exception:
+        # BotRuntime owns operational error publication once run() begins.
+        return
 
 
 class DraftShowdownGUI(ctk.CTk):
@@ -125,14 +141,17 @@ class DraftShowdownGUI(ctk.CTk):
         self._available_serials: tuple[str, ...] = ()
         self._runtime_events: EventBus | None = None
         self._cancellation: CancellationToken | None = None
+        self._thread_factory = threading.Thread
         self._bot_thread: threading.Thread | None = None
         self._discovery_thread: threading.Thread | None = None
         self._discovery_results: queue.Queue[DeviceDiscoveryResult] = queue.Queue(
             maxsize=1
         )
         self._log_queue: queue.Queue[str] = queue.Queue(maxsize=500)
+        self._log_line_count = 0
         self._log_sink_id: int | None = None
         self._last_lifecycle_key: tuple[float, str] | None = None
+        self._last_lifecycle_status: str | None = None
         self._last_error_text: str | None = None
         self._reported_dropped_events = 0
 
@@ -288,7 +307,7 @@ class DraftShowdownGUI(ctk.CTk):
             return
         if self._discovery_thread is not None and self._discovery_thread.is_alive():
             return
-        if self._worker_is_active():
+        if self._bot_thread is not None:
             return
 
         self._available_serials = ()
@@ -296,13 +315,23 @@ class DraftShowdownGUI(ctk.CTk):
         self.device_option.set("Buscando dispositivos...")
         self.btn_start.configure(state="disabled")
         self.btn_refresh.configure(state="disabled")
-        self._discovery_thread = threading.Thread(
-            target=run_device_discovery,
-            args=(self._discovery_results,),
-            daemon=True,
-            name="draft-showdown-adb-discovery",
-        )
-        self._discovery_thread.start()
+        try:
+            worker = self._thread_factory(
+                target=run_device_discovery,
+                args=(self._discovery_results,),
+                daemon=True,
+                name="draft-showdown-adb-discovery",
+            )
+            self._discovery_thread = worker
+            worker.start()
+        except Exception as exc:
+            self._discovery_thread = None
+            self._available_serials = ()
+            self.device_option.configure(values=["Falha na busca ADB"])
+            self.device_option.set("Falha na busca ADB")
+            self.btn_start.configure(state="disabled")
+            self.btn_refresh.configure(state="normal")
+            logger.error("Não foi possível iniciar a busca ADB: {!r}", exc)
 
     def _process_discovery_results(self) -> None:
         if self._closing:
@@ -332,7 +361,7 @@ class DraftShowdownGUI(ctk.CTk):
         self.after(DISCOVERY_POLL_MS, self._process_discovery_results)
 
     def start_observation(self) -> None:
-        if self._closing or self.is_running or self._worker_is_active():
+        if self._closing or self.is_running or self._bot_thread is not None:
             return
 
         serial = self.device_option.get().strip()
@@ -345,6 +374,7 @@ class DraftShowdownGUI(ctk.CTk):
         self._cancellation = cancellation
         self._runtime_events = events
         self._last_lifecycle_key = None
+        self._last_lifecycle_status = None
         self._last_error_text = None
         self._reported_dropped_events = 0
         self.is_running = True
@@ -355,13 +385,25 @@ class DraftShowdownGUI(ctk.CTk):
         self.btn_stop.configure(state="normal")
         self.btn_refresh.configure(state="disabled")
 
-        self._bot_thread = threading.Thread(
-            target=run_observer_worker,
-            args=(serial, cancellation, events),
-            daemon=True,
-            name="draft-showdown-observer",
-        )
-        self._bot_thread.start()
+        try:
+            worker = self._thread_factory(
+                target=run_observer_worker,
+                args=(serial, cancellation, events),
+                daemon=True,
+                name="draft-showdown-observer",
+            )
+            self._bot_thread = worker
+            worker.start()
+        except Exception as exc:
+            cancellation.cancel()
+            self._bot_thread = None
+            self._cancellation = None
+            self._runtime_events = None
+            self.is_running = False
+            self.status_badge.configure(text="🔴 FALHA", fg_color="#A91B0D")
+            self.btn_stop.configure(state="disabled")
+            logger.error("Não foi possível iniciar o worker: {!r}", exc)
+            self._update_controls()
 
     def stop_bot(self) -> None:
         if not self.is_running or self._cancellation is None:
@@ -379,26 +421,29 @@ class DraftShowdownGUI(ctk.CTk):
 
         events = self._runtime_events
         if events is not None:
-            for event in events.drain():
-                self._apply_runtime_event(event)
+            self._consume_runtime_events(events)
 
-            latest_lifecycle = events.latest_lifecycle
-            if latest_lifecycle is not None:
-                self._apply_runtime_event(latest_lifecycle)
-            latest_error = events.latest_error
-            if latest_error is not None:
-                self._apply_runtime_event(latest_error)
-
-            dropped = events.dropped_count
-            if dropped > self._reported_dropped_events:
-                logger.warning(
-                    "Fila de eventos cheia: {} evento(s) de dados descartado(s).",
-                    dropped - self._reported_dropped_events,
-                )
-                self._reported_dropped_events = dropped
-
-        self._reap_worker()
+        self._reap_worker(events)
         self.after(EVENT_POLL_MS, self._process_runtime_events)
+
+    def _consume_runtime_events(self, events: EventBus) -> None:
+        for event in events.drain():
+            self._apply_runtime_event(event)
+
+        latest_lifecycle = events.latest_lifecycle
+        if latest_lifecycle is not None:
+            self._apply_runtime_event(latest_lifecycle)
+        latest_error = events.latest_error
+        if latest_error is not None:
+            self._apply_runtime_event(latest_error)
+
+        dropped = events.dropped_count
+        if dropped > self._reported_dropped_events:
+            logger.warning(
+                "Fila de eventos cheia: {} evento(s) de dados descartado(s).",
+                dropped - self._reported_dropped_events,
+            )
+            self._reported_dropped_events = dropped
 
     def _apply_runtime_event(self, event: RuntimeEvent) -> None:
         observation = format_runtime_event(event)
@@ -413,6 +458,7 @@ class DraftShowdownGUI(ctk.CTk):
             if key == self._last_lifecycle_key:
                 return
             self._last_lifecycle_key = key
+            self._last_lifecycle_status = status
             self.status_badge.configure(text=lifecycle.label, fg_color=lifecycle.color)
             if lifecycle.terminal:
                 self.is_running = False
@@ -436,22 +482,45 @@ class DraftShowdownGUI(ctk.CTk):
     def _worker_is_active(self) -> bool:
         return self._bot_thread is not None and self._bot_thread.is_alive()
 
-    def _reap_worker(self) -> None:
-        if self._bot_thread is None or self._bot_thread.is_alive():
+    def _reap_worker(self, events: EventBus | None) -> None:
+        worker = self._bot_thread
+        if worker is None or worker.is_alive():
             return
+        worker.join(timeout=0)
+        if events is not None:
+            self._consume_runtime_events(events)
+
+        terminal = self._last_lifecycle_status in {"stopped", "failed"}
+        cancelled = self._cancellation is not None and self._cancellation.cancelled
+        if not terminal:
+            self.is_running = False
+            if self._last_error_text is None:
+                if cancelled:
+                    self.status_badge.configure(
+                        text="🔴 PARADO",
+                        fg_color="#A91B0D",
+                    )
+                else:
+                    logger.error(
+                        "Worker de observação terminou sem lifecycle terminal."
+                    )
+                    self.status_badge.configure(
+                        text="🔴 FALHA",
+                        fg_color="#A91B0D",
+                    )
+            self.btn_stop.configure(state="disabled")
+
         self._bot_thread = None
         self._cancellation = None
-        if self.is_running:
-            self.is_running = False
-            self.status_badge.configure(text="🔴 PARADO", fg_color="#A91B0D")
-            self.btn_stop.configure(state="disabled")
+        if self._runtime_events is events:
+            self._runtime_events = None
         self._update_controls()
 
     def _update_controls(self) -> None:
         can_start = (
             not self._closing
             and not self.is_running
-            and not self._worker_is_active()
+            and self._bot_thread is None
             and self.device_option.get().strip() in self._available_serials
         )
         self.btn_start.configure(state="normal" if can_start else "disabled")
@@ -462,31 +531,54 @@ class DraftShowdownGUI(ctk.CTk):
             self._discovery_thread is not None and self._discovery_thread.is_alive()
         )
         self.btn_refresh.configure(
-            state="disabled" if self.is_running or discovering else "normal"
+            state=(
+                "disabled"
+                if self.is_running or self._bot_thread is not None or discovering
+                else "normal"
+            )
         )
 
     def _process_log_queue(self) -> None:
         if self._closing:
             return
+        inserted = False
         for _ in range(200):
             try:
                 message = self._log_queue.get_nowait()
             except queue.Empty:
                 break
+            if not message:
+                continue
+            if not message.endswith("\n"):
+                message += "\n"
             self.log_textbox.insert("end", message)
-        self.log_textbox.see("end")
+            self._log_line_count += message.count("\n")
+            inserted = True
+
+        excess_lines = self._log_line_count - MAX_LOG_LINES
+        if excess_lines > 0:
+            self.log_textbox.delete("1.0", f"{excess_lines + 1}.0")
+            self._log_line_count -= excess_lines
+        if inserted:
+            self.log_textbox.see("end")
         self.after(LOG_POLL_MS, self._process_log_queue)
 
     def _on_close(self) -> None:
         if self._closing:
             return
         self._closing = True
-        if self._cancellation is not None:
-            self._cancellation.cancel()
-        if self._log_sink_id is not None:
-            logger.remove(self._log_sink_id)
-            self._log_sink_id = None
-        self.destroy()
+        try:
+            if self._cancellation is not None:
+                self._cancellation.cancel()
+        finally:
+            try:
+                if self._log_sink_id is not None:
+                    logger.remove(self._log_sink_id)
+            except Exception:
+                pass
+            finally:
+                self._log_sink_id = None
+                self.destroy()
 
 
 def main() -> None:

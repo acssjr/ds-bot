@@ -83,7 +83,7 @@ def test_session_runtime_primitives_are_created_before_thread_start() -> None:
 
     token_line = min(line for name, line in calls if name == "CancellationToken")
     bus_line = min(line for name, line in calls if name == "EventBus")
-    thread_line = min(line for name, line in calls if name == "Thread")
+    thread_line = min(line for name, line in calls if name == "_thread_factory")
     start_line = max(line for name, line in calls if name == "start")
 
     assert token_line < thread_line < start_line
