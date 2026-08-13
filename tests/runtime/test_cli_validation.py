@@ -64,3 +64,27 @@ def test_main_catches_keyboard_interrupt_before_runtime_run(monkeypatch) -> None
 def test_main_bounds_setup_logger_failures(monkeypatch, failure, code) -> None:
     monkeypatch.setattr("src.main.setup_logger", lambda level: (_ for _ in ()).throw(failure))
     assert main(["--device", "offline"]) == code
+
+
+def test_main_catches_keyboard_interrupt_during_replay_validation(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("src.main.os.access", lambda path, mode: (_ for _ in ()).throw(KeyboardInterrupt()))
+    assert main(["--replay", str(tmp_path)]) == 130
+
+
+def test_main_reports_replay_source_operational_failure(monkeypatch, tmp_path: Path) -> None:
+    path = tmp_path / "one.png"
+    assert cv2.imwrite(str(path), np.zeros((2, 2, 3), dtype=np.uint8))
+    monkeypatch.setattr("src.main.ReplayCaptureSource", lambda paths: (_ for _ in ()).throw(RuntimeError("replay boom")))
+    assert main(["--replay", str(tmp_path)]) == 1
+
+
+def test_main_fallback_stderr_survives_failing_logger(monkeypatch, capsys) -> None:
+    class BrokenLogger:
+        def error(self, *args):
+            raise RuntimeError("logger broken")
+
+    monkeypatch.setattr("src.main.setup_logger", lambda level: None)
+    monkeypatch.setattr("src.main.logger", BrokenLogger())
+    monkeypatch.setattr("src.main.DeviceSession", lambda serial: (_ for _ in ()).throw(RuntimeError("adb down")))
+    assert main(["--device", "offline"]) == 1
+    assert "runtime failure" in capsys.readouterr().err

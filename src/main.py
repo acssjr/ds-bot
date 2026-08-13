@@ -59,76 +59,62 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    cancellation: CancellationToken | None = None
     try:
-        setup_logger("INFO")
+        return _main(args, cancellation_holder=lambda token: token)
     except KeyboardInterrupt:
         return 130
+    except (FileNotFoundError, TypeError, ValueError) as exc:
+        _report_error("runtime configuration is invalid", exc)
+        return 2
     except Exception as exc:
-        print(f"runtime setup failed: {exc}", file=sys.stderr)
+        _report_error("runtime failure", exc)
         return 1
+
+
+def _report_error(prefix: str, exc: BaseException) -> None:
+    try:
+        logger.error("{}: {}", prefix, exc)
+    except Exception:
+        print(f"{prefix}: {exc}", file=sys.stderr)
+
+
+def _main(args, cancellation_holder) -> int:
+    setup_logger("INFO")
     cancellation = CancellationToken()
     events = LoggingEventSink(logger)
 
     if args.replay is not None:
         if not args.replay.is_dir() or not os.access(args.replay, os.R_OK):
-            logger.error("replay directory is missing or unreadable: {}", args.replay)
+            _report_error("replay directory is missing or unreadable", args.replay)
             return 2
         try:
             paths = sorted(path for path in args.replay.iterdir() if path.suffix.lower() in {".png", ".jpg", ".jpeg"})
         except OSError as exc:
-            logger.error("unable to read replay directory {}: {}", args.replay, exc)
+            _report_error("unable to read replay directory", exc)
             return 2
         if not paths:
-            logger.error("replay directory contains no PNG/JPG images: {}", args.replay)
+            _report_error("replay directory contains no PNG/JPG images", args.replay)
             return 2
         if args.frames is not None and args.frames > len(paths):
-            logger.error("requested {} frames but replay contains only {} images", args.frames, len(paths))
+            _report_error("requested frames exceed replay images", RuntimeError(f"{args.frames} > {len(paths)}"))
             return 2
         source = ReplayCaptureSource(paths)
         serial = "replay"
         connection_generation = lambda: 0
         max_frames = args.frames if args.frames is not None else len(paths)
     else:
-        try:
-            session = DeviceSession(args.device)
-            source = ADBCaptureSource(session)
-            serial = session.serial
-            connection_generation = lambda: session.connection_generation
-            max_frames = args.frames
-        except KeyboardInterrupt:
-            return 130
-        except Exception as exc:
-            logger.error("runtime setup failed: {}", exc)
-            return 1
+        session = DeviceSession(args.device)
+        source = ADBCaptureSource(session)
+        serial = session.serial
+        connection_generation = lambda: session.connection_generation
+        max_frames = args.frames
 
-    try:
-        capture = CaptureManager(source, device_serial=serial, connection_generation=connection_generation)
-        runtime = BotRuntime(
-            capture=capture,
-            perception=LegacyVisionAdapter(),
-            events=events,
-            lifecycle=Lifecycle(),
-            cancellation=cancellation,
-            settings=RuntimeSettings(args.interval),
-        )
-    except KeyboardInterrupt:
-        return 130
-    except (FileNotFoundError, TypeError, ValueError) as exc:
-        logger.error("runtime configuration is invalid: {}", exc)
-        return 2
-    except Exception as exc:
-        logger.error("runtime setup failed: {}", exc)
-        return 1
+    capture = CaptureManager(source, device_serial=serial, connection_generation=connection_generation)
+    runtime = BotRuntime(capture=capture, perception=LegacyVisionAdapter(), events=events, lifecycle=Lifecycle(), cancellation=cancellation, settings=RuntimeSettings(args.interval))
 
     logger.warning("OBSERVE-ONLY: no taps or swipes can be sent by this runtime")
-    try:
-        processed = runtime.run(max_frames=max_frames)
-    except KeyboardInterrupt:
-        cancellation.cancel()
-        return 130
-    except Exception as exc:
-        logger.error("runtime failed: {}", exc)
-        return 1
+    processed = runtime.run(max_frames=max_frames)
     logger.info("processed {} frames", processed)
     return 0
 
