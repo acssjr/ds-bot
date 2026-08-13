@@ -1,120 +1,73 @@
-import time
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
 from loguru import logger
 
+from src.capture.adb_source import ADBCaptureSource
+from src.capture.manager import CaptureManager
+from src.capture.replay import ReplayCaptureSource
+from src.core.cancellation import CancellationToken
+from src.core.events import EventBus
+from src.core.lifecycle import Lifecycle
+from src.device.session import DeviceSession
+from src.runtime.bot_runtime import BotRuntime, RuntimeSettings
 from src.utils.logging_config import setup_logger
-from src.utils.watchdog import Watchdog
-from src.capture.adb_capture import ADBCapture
-from src.vision.pipeline import VisionPipeline
-from src.state.state_manager import StateManager
-from src.state.game_state import ScreenState
-from src.strategy.draft_evaluator import DraftEvaluator
-from src.actions.action_planner import ActionPlanner
-from src.controllers.adb_controller import ADBController
+from src.vision.legacy_adapter import LegacyVisionAdapter
 
-def main() -> None:
-    logger = setup_logger("INFO")
-    logger.info("==================================================")
-    logger.info("Iniciando Bot Autônomo - Draft Showdown (Visão + Ads)")
-    logger.info("==================================================")
 
-    capture_stream = ADBCapture()
-    if not capture_stream.start():
-        logger.error("Falha ao inicializar o leitor de tela ADB. Verifique a conexão com o emulador MEmu.")
-        return
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Draft Showdown observe-only runtime")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--device", help="explicit ADB serial, for example 127.0.0.1:21503")
+    source.add_argument("--replay", type=Path, help="directory containing replay PNG/JPG files")
+    parser.add_argument("--frames", type=int, default=None, help="stop after this many frames")
+    parser.add_argument("--interval", type=float, default=0.25, help="seconds between frames")
+    return parser
 
-    vision_pipeline = VisionPipeline(templates_dir="assets/templates")
-    state_manager = StateManager(persistence_frames=2)
-    draft_evaluator = DraftEvaluator()
-    action_planner = ActionPlanner()
-    controller = ADBController()
-    watchdog = Watchdog(timeout_seconds=35)
 
-    watch_ads_policy = True  # Politica de assistir anúncios ativada
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    setup_logger("INFO")
+    cancellation = CancellationToken()
+    events = EventBus()
 
-    logger.info("Loop de automação em execução. Pressione Ctrl+C para encerrar.")
+    if args.replay is not None:
+        paths = sorted(path for path in args.replay.iterdir() if path.suffix.lower() in {".png", ".jpg", ".jpeg"})
+        source = ReplayCaptureSource(paths)
+        serial = "replay"
+        connection_generation = lambda: 0
+        max_frames = args.frames if args.frames is not None else len(paths)
+    else:
+        session = DeviceSession(args.device)
+        source = ADBCaptureSource(session)
+        serial = session.serial
+        connection_generation = lambda: session.connection_generation
+        max_frames = args.frames
 
+    capture = CaptureManager(source, device_serial=serial, connection_generation=connection_generation)
+    runtime = BotRuntime(
+        capture=capture,
+        perception=LegacyVisionAdapter(),
+        events=events,
+        lifecycle=Lifecycle(),
+        cancellation=cancellation,
+        settings=RuntimeSettings(args.interval),
+    )
+
+    logger.warning("OBSERVE-ONLY: no taps or swipes can be sent by this runtime")
     try:
-        while True:
-            # 1. Captura do Frame Atual
-            frame = capture_stream.get_latest_frame()
-            if frame is None:
-                time.sleep(0.1)
-                continue
-
-            h, w = frame.shape[:2]
-            controller.update_screen_size(w, h)
-
-            # 2. Processamento de Visão Computacional
-            perception_data = vision_pipeline.analyze(frame)
-
-            # 3. Atualização da FSM
-            current_state = state_manager.update(perception_data)
-            watchdog.feed(current_state.screen)
-
-            # 4. Verificação de Saúde via Watchdog
-            if watchdog.is_stuck():
-                logger.warning("Travamento detectado pelo Watchdog! Acionando protocolo de recuperação do app...")
-                controller.recover_app_state()
-                state_manager.reset()
-                watchdog.reset()
-                continue
-
-            # 5. Tomada de Decisão Baseada nos 13 Estados Mapeados
-            chosen_action = None
-            screen = current_state.screen
-            sub = current_state.sub_element
-
-            if screen == ScreenState.HOME:
-                has_reiv = (sub == "reiv_home_btn")
-                chosen_action = action_planner.plan_start_match(has_home_reiv=has_reiv)
-
-            elif screen == ScreenState.DRAFT_SCREEN:
-                best_slot = draft_evaluator.evaluate_choices(current_state.available_choices)
-                chosen_action = action_planner.plan_card_selection(slot_index=best_slot)
-
-            elif screen == ScreenState.POSITION_UNITS:
-                chosen_action = action_planner.plan_unit_positioning()
-
-            elif screen == ScreenState.VICTORY_SUMMARY:
-                chosen_action = action_planner.plan_handle_victory_summary(sub_element=sub, watch_ads=watch_ads_policy)
-
-            elif screen == ScreenState.DOUBLE_BITS:
-                chosen_action = action_planner.plan_handle_double_bits(watch_ads=watch_ads_policy)
-
-            elif screen == ScreenState.MASTERY_BOOST:
-                chosen_action = action_planner.plan_handle_mastery_boost()
-
-            elif screen == ScreenState.BIT_PACK_OPENING:
-                chosen_action = action_planner.plan_skip_bit_pack()
-
-            elif screen == ScreenState.NEW_UNIT_UNLOCKED:
-                chosen_action = action_planner.plan_unlock_new_unit()
-
-            elif screen == ScreenState.WATCHING_AD:
-                chosen_action = action_planner.plan_close_ad(sub_element=sub)
-
-            elif screen == ScreenState.COLLECTION_MENU:
-                chosen_action = action_planner.plan_switch_to_battle_tab()
-
-            elif screen == ScreenState.WAIT_MATCHMAKING or screen == ScreenState.COMBAT:
-                logger.debug(f"Estado passivo '{screen.value}'... Monitorando tela.")
-                time.sleep(0.5)
-
-            # 6. Execução da Ação
-            if chosen_action:
-                logger.info(f"[{screen.value}] Executando Ação: {chosen_action.metadata}")
-                controller.execute(chosen_action)
-                time.sleep(chosen_action.post_delay_ms / 1000.0)
-
-            time.sleep(0.1)
-
+        processed = runtime.run(max_frames=max_frames)
     except KeyboardInterrupt:
-        logger.info("Encerramento solicitado pelo usuário.")
-    except Exception as e:
-        logger.exception(f"Exceção não tratada no loop principal: {e}")
+        cancellation.cancel()
+        return 130
     finally:
-        capture_stream.stop()
-        logger.info("Bot finalizado com sucesso.")
+        for event in events.drain():
+            logger.info("{} | {}", event.kind.value, dict(event.payload))
+    logger.info("processed {} frames", processed)
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
