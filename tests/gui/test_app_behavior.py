@@ -159,6 +159,7 @@ def make_headless_gui(
     gui.btn_stop = FakeWidget("stop", timeline=timeline)
     gui.btn_refresh = FakeWidget("refresh", timeline=timeline)
     gui.lbl_current_state = FakeWidget("observation", timeline=timeline)
+    gui.lbl_context_state = FakeWidget("context", timeline=timeline)
     gui.lbl_session_state = FakeWidget("session", timeline=timeline)
     gui.lbl_capture_state = FakeWidget("capture", timeline=timeline)
     gui.lbl_dataset_state = FakeWidget("dataset", timeline=timeline)
@@ -291,6 +292,25 @@ def test_observation_panel_reports_session_coverage_and_transitions() -> None:
     assert "Observações: 2" in text
     assert "Transições: 1" in text
     assert "UNKNOWN: 1 (50.0%)" in text
+
+
+def test_ad_context_never_presents_pending_reward_as_safe_to_close() -> None:
+    gui = make_headless_gui()
+
+    gui._apply_runtime_event(
+        RuntimeEvent(
+            EventKind.OBSERVATION,
+            1.0,
+            {
+                "screen": "WATCHING_AD",
+                "confidence": 0.9,
+                "context": "rewarded_ad",
+                "safe_to_close": False,
+            },
+        )
+    )
+
+    assert "Fechamento seguro: NÃO" in str(gui.lbl_context_state.options["text"])
 
 def test_runtime_failure_is_not_duplicated_by_gui_worker() -> None:
     events = EventBus(capacity=16)

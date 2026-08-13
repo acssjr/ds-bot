@@ -89,6 +89,13 @@ class ScreenClassifier:
             "new_unit": ScreenState.NEW_UNIT_UNLOCKED,
             "watching_ad": ScreenState.WATCHING_AD,
             "collection_menu": ScreenState.COLLECTION_MENU,
+            "shop": ScreenState.SHOP_MENU,
+            "shop_daily_offers": ScreenState.SHOP_DAILY_OFFERS,
+            "ads": ScreenState.WATCHING_AD,
+            "ad_reward_granted": ScreenState.AD_REWARD_GRANTED,
+            "league": ScreenState.LEAGUE_MENU,
+            "ranked": ScreenState.RANKED_LOCKED,
+            "profile": ScreenState.PROFILE_MENU,
         }
         loaded: list[LoadedTemplate] = []
         for folder, screen in folder_to_state.items():
@@ -124,6 +131,8 @@ class ScreenClassifier:
             raise ValueError("frame must be an HxWx3 BGR image")
         if frame.max() <= 8 or (frame.mean() <= 2.0 and frame.std() <= 2.0):
             return ScreenState.UNKNOWN, 0.0, "blank_frame"
+        if self._has_ad_progress_bar(frame):
+            return ScreenState.WATCHING_AD, 0.90, "ad_progress_pending"
 
         best_score = 0.0
         best_template: LoadedTemplate | None = None
@@ -206,3 +215,16 @@ class ScreenClassifier:
         red = cv2.inRange(top, np.array([0, 70, 120]), np.array([12, 255, 255]))
         blue = cv2.inRange(bottom, np.array([90, 45, 90]), np.array([135, 255, 255]))
         return bool(np.mean(red > 0) >= 0.35 and np.mean(blue > 0) >= 0.35)
+
+    @staticmethod
+    def _has_ad_progress_bar(frame: np.ndarray) -> bool:
+        """Detect rewarded-ad SDKs that expose a thin yellow progress bar."""
+        top = cv2.cvtColor(frame[:24], cv2.COLOR_BGR2HSV)
+        yellow = cv2.inRange(
+            top,
+            np.array([18, 70, 120], dtype=np.uint8),
+            np.array([42, 255, 255], dtype=np.uint8),
+        )
+        bar_ratio = float(np.mean(yellow[:7] > 0))
+        content_ratio = float(np.mean(yellow[9:24] > 0))
+        return bool(bar_ratio >= 0.005 and content_ratio < 0.15 and bar_ratio > content_ratio + 0.005)

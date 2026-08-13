@@ -2,6 +2,78 @@
   "version": 1,
   "templates": [
     {
+      "id": "ad_reward_granted",
+      "path": "ads/reward_granted_verified.png",
+      "screen": "AD_REWARD_GRANTED",
+      "threshold": 0.80,
+      "roi": [0.0, 0.0, 0.5, 0.12],
+      "scales": [0.95, 1.0, 1.05]
+    },
+    {
+      "id": "ad_endcard_close_ready",
+      "path": "ads/endcard_close_verified.png",
+      "screen": "AD_REWARD_GRANTED",
+      "threshold": 0.84,
+      "roi": [0.78, 0.0, 1.0, 0.15],
+      "scales": [0.95, 1.0, 1.05]
+    },
+    {
+      "id": "ad_countdown_pending",
+      "path": "ads/countdown_verified.png",
+      "screen": "WATCHING_AD",
+      "threshold": 0.72,
+      "roi": [0.0, 0.0, 0.65, 0.12],
+      "scales": [0.95, 1.0, 1.05]
+    },
+    {
+      "id": "shop_daily_offers",
+      "path": "shop/daily_offers_verified.png",
+      "screen": "SHOP_DAILY_OFFERS",
+      "threshold": 0.80,
+      "roi": [0.0, 0.15, 1.0, 0.9],
+      "scales": [0.95, 1.0, 1.05]
+    },
+    {
+      "id": "shop_tabs",
+      "path": "shop/shop_tabs_verified.png",
+      "screen": "SHOP_MENU",
+      "threshold": 0.82,
+      "roi": [0.0, 0.04, 1.0, 0.24],
+      "scales": [0.95, 1.0, 1.05]
+    },
+    {
+      "id": "league_bronze",
+      "path": "league/league_bronze_verified.png",
+      "screen": "LEAGUE_MENU",
+      "threshold": 0.82,
+      "roi": [0.12, 0.08, 0.88, 0.3],
+      "scales": [0.95, 1.0, 1.05]
+    },
+    {
+      "id": "ranked_locked",
+      "path": "ranked/ranked_locked_verified.png",
+      "screen": "RANKED_LOCKED",
+      "threshold": 0.82,
+      "roi": [0.0, 0.05, 1.0, 0.35],
+      "scales": [0.95, 1.0, 1.05]
+    },
+    {
+      "id": "ranked_locked_stable",
+      "path": "ranked/ranked_locked_stable_verified.png",
+      "screen": "RANKED_LOCKED",
+      "threshold": 0.82,
+      "roi": [0.0, 0.05, 1.0, 0.35],
+      "scales": [0.95, 1.0, 1.05]
+    },
+    {
+      "id": "profile_statistics",
+      "path": "profile/statistics_verified.png",
+      "screen": "PROFILE_MENU",
+      "threshold": 0.82,
+      "roi": [0.05, 0.45, 0.95, 0.8],
+      "scales": [0.95, 1.0, 1.05]
+    },
+    {
       "id": "home_battle_button",
       "path": "home/batalha_verified.png",
       "screen": "HOME",

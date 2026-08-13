@@ -291,6 +291,12 @@ class DraftShowdownGUI(ctk.CTk):
             font=ctk.CTkFont(size=14, weight="bold"),
         )
         self.lbl_current_state.pack(anchor="w", padx=15, pady=10)
+        self.lbl_context_state = ctk.CTkLabel(
+            state_frame,
+            text="Contexto: aguardando observações",
+            text_color="#FFE082",
+        )
+        self.lbl_context_state.pack(anchor="w", padx=15, pady=(0, 6))
         self.lbl_session_state = ctk.CTkLabel(
             state_frame,
             text="Sessão: - | Observações: 0 | Transições: 0 | UNKNOWN: 0",
@@ -517,6 +523,7 @@ class DraftShowdownGUI(ctk.CTk):
         observation = format_runtime_event(event)
         if observation is not None:
             self.lbl_current_state.configure(text=observation)
+            self._update_context_details(event)
             self._update_observation_metrics(event)
             return
 
@@ -618,6 +625,39 @@ class DraftShowdownGUI(ctk.CTk):
                 f"({unknown_rate:.1%}) | Tela estável: {max(0.0, now - stable_since):.1f}s"
             )
         )
+
+    def _update_context_details(self, event: RuntimeEvent) -> None:
+        context = event.payload.get("context")
+        if context == "daily_offers":
+            free_ads = int(event.payload.get("free_ad_offers_visible", 0))
+            refresh_ad = "sim" if event.payload.get("daily_refresh_ad_visible") else "não visível"
+            countdown = (
+                "visível; leitura numérica pendente"
+                if event.payload.get("next_refresh_countdown_visible")
+                else "fora do enquadramento"
+            )
+            text = (
+                f"Ofertas diárias: {free_ads} botão(ões) por anúncio | "
+                f"Atualização por anúncio: {refresh_ad} | Próxima renovação: {countdown}"
+            )
+        elif context == "shop":
+            text = "Loja: ofertas pagas e por anúncio; role até Ofertas diárias para detalhamento"
+        elif context == "rewarded_ad":
+            safe = bool(event.payload.get("safe_to_close"))
+            text = (
+                "Anúncio recompensado: RECOMPENSA CONFIRMADA | Fechamento seguro: SIM"
+                if safe
+                else "Anúncio recompensado: aguardando timer/barra | Fechamento seguro: NÃO"
+            )
+        elif context == "league":
+            text = "Liga: BRONZE | Troféus/ranking visíveis; leitura numérica ainda pendente"
+        elif context == "ranked":
+            text = "Modo ranqueado: BLOQUEADO"
+        elif context == "profile":
+            text = "Perfil: estatísticas do jogador visíveis"
+        else:
+            text = f"Contexto: {event.payload.get('screen', 'UNKNOWN')}"
+        self.lbl_context_state.configure(text=text)
 
     def _reap_worker(self, events: EventBus | None) -> None:
         worker = self._bot_thread

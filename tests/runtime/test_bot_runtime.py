@@ -213,6 +213,12 @@ def test_legacy_pipeline_does_not_fabricate_card_choices() -> None:
     pipeline.screen_classifier = type(
         "Classifier", (), {"classify": lambda self, image: (ScreenState.UNKNOWN, 0.0, None)}
     )()
+    pipeline.context_analyzer = type(
+        "Context", (), {"analyze": lambda self, image, screen, sub_element: {}}
+    )()
+    pipeline._last_screen = ScreenState.UNKNOWN
+    pipeline._last_confidence = 0.0
+    pipeline._unknown_streak = 0
 
     result = pipeline.analyze(np.zeros((2, 3, 3), dtype=np.uint8))
 

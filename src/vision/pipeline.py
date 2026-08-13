@@ -3,6 +3,7 @@ from loguru import logger
 from typing import Dict, Any
 
 from src.vision.classifiers.screen_classifier import ScreenClassifier
+from src.vision.context_analyzer import ContextAnalyzer
 from src.core.cancellation import CancellationToken
 from src.state.game_state import ScreenState
 
@@ -11,6 +12,20 @@ class VisionPipeline:
 
     def __init__(self, templates_dir: str = "assets/templates"):
         self.screen_classifier = ScreenClassifier(templates_dir=templates_dir)
+        self.context_analyzer = ContextAnalyzer(templates_dir)
+        self._last_screen = ScreenState.UNKNOWN
+        self._last_confidence = 0.0
+        self._unknown_streak = 0
+
+    _STICKY_SCREENS = {
+        ScreenState.SHOP_MENU,
+        ScreenState.SHOP_DAILY_OFFERS,
+        ScreenState.WATCHING_AD,
+        ScreenState.AD_REWARD_GRANTED,
+        ScreenState.LEAGUE_MENU,
+        ScreenState.RANKED_LOCKED,
+        ScreenState.PROFILE_MENU,
+    }
 
     def analyze(self, frame: np.ndarray, *, cancellation: CancellationToken | None = None) -> Dict[str, Any]:
         """
@@ -32,9 +47,28 @@ class VisionPipeline:
         if cancellation is not None:
             cancellation.raise_if_cancelled()
 
-        return {
+        if (
+            screen_state is ScreenState.UNKNOWN
+            and sub_element != "blank_frame"
+            and self._last_screen in self._STICKY_SCREENS
+            and self._unknown_streak < 12
+        ):
+            self._unknown_streak += 1
+            screen_state = self._last_screen
+            confidence = max(0.51, self._last_confidence * (0.92 ** self._unknown_streak))
+            sub_element = f"carried:{screen_state.value.lower()}"
+        elif screen_state is not ScreenState.UNKNOWN:
+            self._last_screen = screen_state
+            self._last_confidence = confidence
+            self._unknown_streak = 0
+        else:
+            self._unknown_streak += 1
+
+        result = {
             "screen": screen_state,
             "confidence": confidence,
             "sub_element": sub_element,
             "frame_shape": frame.shape
         }
+        result.update(self.context_analyzer.analyze(frame, screen_state, sub_element))
+        return result
