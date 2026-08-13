@@ -1,32 +1,48 @@
+import math
 from typing import Tuple
 
+
 class CoordinateConverter:
-    """Utilitário para normalizar e denormalizar coordenadas de tela entre [0.0, 1.0] e pixels reais."""
-    
-    @staticmethod
-    def normalize(pixel_x: int, pixel_y: int, screen_width: int, screen_height: int) -> Tuple[float, float]:
-        """Converte coordenadas em pixels para o espaço normalizado [0.0, 1.0]."""
-        if screen_width <= 0 or screen_height <= 0:
-            raise ValueError("Dimensões da tela devem ser maiores que zero.")
-        norm_x = max(0.0, min(1.0, pixel_x / screen_width))
-        norm_y = max(0.0, min(1.0, pixel_y / screen_height))
-        return (norm_x, norm_y)
+    """Compatibility adapter for normalized framebuffer coordinates."""
 
     @staticmethod
-    def denormalize(norm_x: float, norm_y: float, screen_width: int, screen_height: int) -> Tuple[int, int]:
-        """Converte coordenadas normalizadas [0.0, 1.0] para pixels absolutos da tela."""
-        pixel_x = int(round(norm_x * screen_width))
-        pixel_y = int(round(norm_y * screen_height))
-        return (pixel_x, pixel_y)
+    def normalize(
+        pixel_x: int,
+        pixel_y: int,
+        screen_width: int,
+        screen_height: int,
+    ) -> Tuple[float, float]:
+        if screen_width <= 0 or screen_height <= 0:
+            raise ValueError("screen dimensions must be positive")
+        if not (0 <= pixel_x < screen_width and 0 <= pixel_y < screen_height):
+            raise ValueError("pixel coordinates must be inside the screen")
+        nx = 0.0 if screen_width == 1 else pixel_x / (screen_width - 1)
+        ny = 0.0 if screen_height == 1 else pixel_y / (screen_height - 1)
+        return nx, ny
+
+    @staticmethod
+    def denormalize(
+        norm_x: float,
+        norm_y: float,
+        screen_width: int,
+        screen_height: int,
+    ) -> Tuple[int, int]:
+        if screen_width <= 0 or screen_height <= 0:
+            raise ValueError("screen dimensions must be positive")
+        if not (0.0 <= norm_x <= 1.0 and 0.0 <= norm_y <= 1.0):
+            raise ValueError("normalized coordinates must be between 0 and 1")
+        x = round(norm_x * max(0, screen_width - 1))
+        y = round(norm_y * max(0, screen_height - 1))
+        return x, y
 
     @staticmethod
     def crop_roi(image, norm_box: Tuple[float, float, float, float]):
-        """
-        Recorta uma Região de Interesse (ROI) de uma imagem OpenCV (NumPy array)
-        usando caixa normalizada (min_x, min_y, max_x, max_y).
-        """
-        h, w = image.shape[:2]
-        min_x, min_y, max_x, max_y = norm_box
-        x1, y1 = CoordinateConverter.denormalize(min_x, min_y, w, h)
-        x2, y2 = CoordinateConverter.denormalize(max_x, max_y, w, h)
+        height, width = image.shape[:2]
+        left, top, right, bottom = norm_box
+        if not (0.0 <= left < right <= 1.0 and 0.0 <= top < bottom <= 1.0):
+            raise ValueError("ROI must be ordered and inside the normalized screen")
+        x1 = max(0, min(width, math.floor(left * width)))
+        y1 = max(0, min(height, math.floor(top * height)))
+        x2 = max(0, min(width, math.ceil(right * width)))
+        y2 = max(0, min(height, math.ceil(bottom * height)))
         return image[y1:y2, x1:x2]

@@ -14,8 +14,8 @@ def test_coordinate_conversion():
     w, h = 1280, 720
     px, py = 640, 360
     nx, ny = CoordinateConverter.normalize(px, py, w, h)
-    assert nx == pytest.approx(0.5)
-    assert ny == pytest.approx(0.5)
+    assert nx == pytest.approx(640 / 1279)
+    assert ny == pytest.approx(360 / 719)
 
     denorm_x, denorm_y = CoordinateConverter.denormalize(nx, ny, w, h)
     assert denorm_x == px
