@@ -7,10 +7,14 @@ from src.strategy.unit_knowledge import (
     GAME_DATA_VERSION,
     counter_tendency,
     synergy,
+    transformation_combat_factor,
+    transformation_damage_rate_factor,
+    transformation_tier,
     unit_count_tendency,
     unit_for,
 )
 from src.vision.draft_reader import DraftCard
+from src.device.profile_reader import AccountSnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,12 +52,16 @@ class DraftDecision:
 class DraftPolicy:
     """Explainable policy grounded in game data, composition, and opposition."""
 
+    def __init__(self, account: AccountSnapshot | None = None) -> None:
+        self._account = account
+
     def choose(
         self,
         cards: Iterable[DraftCard],
         *,
         history: Mapping[str, int],
         variant: str,
+        tiers: Mapping[str, int] | None = None,
         enemy_units: Iterable[str] = (),
         enemy_pressure: str = "unknown",
     ) -> DraftDecision:
@@ -62,6 +70,7 @@ class DraftPolicy:
             raise ValueError("at least one draft card is required")
         distinct_units = len(history)
         enemy_list = tuple(dict.fromkeys(str(unit) for unit in enemy_units))
+        tier_history = tiers or {}
         owned_roles = {
             role
             for name, count in history.items()
@@ -78,6 +87,23 @@ class DraftPolicy:
                 score += 10.0
                 reasons.append(f"unidade reconhecida ({card.unit}) +10")
 
+            account_level = self._account.level_for(card.unit) if self._account else 1
+            mastery_points = self._account.mastery_for(card.unit) if self._account else 0
+            stat_factor = (
+                knowledge.stat_multiplier_per_level ** (account_level - 1)
+                if knowledge is not None
+                else 1.0
+            )
+            if account_level > 1:
+                progression_bonus = (stat_factor - 1.0) * 20.0
+                score += progression_bonus
+                reasons.append(
+                    f"progressão ADB Nv.{account_level} ({stat_factor:.3f}x stats) "
+                    f"+{progression_bonus:.1f}"
+                )
+            if mastery_points:
+                reasons.append(f"maestria ADB {mastery_points} pontos")
+
             tracked_owned = (
                 sum(
                     count
@@ -90,6 +116,18 @@ class DraftPolicy:
                 else history.get(card.unit, 0) if card.unit is not None else 0
             )
             owned = tracked_owned
+            current_tier = 1
+            if knowledge is not None:
+                current_tier = max(
+                    (
+                        int(value)
+                        for name, value in tier_history.items()
+                        if (tier_unit := unit_for(name)) is not None
+                        and tier_unit.internal_name == knowledge.internal_name
+                    ),
+                    default=1,
+                )
+                current_tier = min(3, max(1, current_tier))
             if (
                 owned == 0
                 and knowledge is not None
@@ -102,13 +140,19 @@ class DraftPolicy:
                 reasons.append(
                     f"contagem inicial inferida da carta: {owned} {knowledge.display_name}"
                 )
-            body_value = (
+            tier_factor = transformation_combat_factor(card.unit, current_tier)
+            base_body_value = (
                 min(
                     4.0,
-                    knowledge.base_health / 100.0 + knowledge.base_damage / 50.0,
+                    knowledge.base_health * stat_factor / 100.0
+                    + knowledge.base_damage * stat_factor / 50.0,
                 )
                 if knowledge is not None
                 else 1.0
+            )
+            body_value = base_body_value * tier_factor
+            normalized_effect = (
+                "upgrade" if card.effect == "transform" else card.effect
             )
             effect_bonus = {
                 "add": 4.0 + body_value * card.magnitude,
@@ -118,8 +162,8 @@ class DraftPolicy:
                     if owned
                     else -10.0
                 ),
-                "upgrade": 20.0 if owned else 3.0,
-                "transform": 14.0 if owned else 2.0,
+                "upgrade": 10.0 if owned else 3.0,
+                "transform": 10.0 if owned else 3.0,
                 "unknown": 0.0,
             }[card.effect]
             score += effect_bonus
@@ -128,7 +172,7 @@ class DraftPolicy:
 
             if knowledge is not None:
                 count_tendency = unit_count_tendency(
-                    card.effect,
+                    normalized_effect,
                     spawn_group=knowledge.early_spawn,
                     current_count=owned,
                 )
@@ -139,6 +183,65 @@ class DraftPolicy:
                         f"tabela IA por contagem APK {GAME_DATA_VERSION} "
                         f"({owned} em campo) {count_bonus:+.1f}"
                     )
+                if card.effect == "multiply" and owned:
+                    added_units = owned * max(1, card.magnitude - 1)
+                    added_health = knowledge.base_health * stat_factor * added_units
+                    active_tier = transformation_tier(card.unit, current_tier)
+                    if active_tier is not None:
+                        added_health *= (
+                            active_tier.health_multiplier
+                            + active_tier.revive_health_multiplier
+                        )
+                        reasons.append(
+                            f"x{card.magnitude} duplica tier {active_tier.tier} "
+                            f"({active_tier.label}, valor corporal {tier_factor:.2f}x)"
+                        )
+                    cycle = knowledge.attack_cycle_seconds
+                    hits = knowledge.direct_damage_events_per_cycle
+                    if cycle and hits:
+                        added_dps = (
+                            knowledge.base_damage
+                            * stat_factor
+                            * hits
+                            / cycle
+                            * added_units
+                            * transformation_damage_rate_factor(
+                                card.unit, current_tier
+                            )
+                        )
+                        reasons.append(
+                            f"x{card.magnitude} adiciona {added_units} corpo(s): "
+                            f"~{added_health:.0f} vida e ~{added_dps:.0f} DPS direto "
+                            "antes de habilidades"
+                        )
+                    else:
+                        reasons.append(
+                            f"x{card.magnitude} adiciona {added_units} corpo(s): "
+                            f"~{added_health:.0f} vida; dano depende da habilidade especial"
+                        )
+                    if "summoner" in knowledge.roles:
+                        reasons.append(
+                            "duplicação também multiplica invocadores; unidades geradas "
+                            "não estão incluídas no DPS estimado"
+                        )
+                if normalized_effect == "upgrade" and owned:
+                    if current_tier >= 3:
+                        score -= 30.0
+                        reasons.append("tier elite jÃ¡ rastreado; upgrade inconsistente -30")
+                    else:
+                        next_tier = current_tier + 1
+                        next_factor = transformation_combat_factor(card.unit, next_tier)
+                        gain = max(0.0, next_factor - tier_factor)
+                        transformation_bonus = owned * gain * base_body_value * 4.0
+                        score += transformation_bonus
+                        next_data = transformation_tier(card.unit, next_tier)
+                        reasons.append(
+                            f"evolui {owned} corpo(s) tier {current_tier}->{next_tier}: "
+                            f"valor {tier_factor:.2f}x->{next_factor:.2f}x "
+                            f"+{transformation_bonus:.1f}"
+                        )
+                        if next_data is not None:
+                            reasons.append(next_data.description)
                 score += knowledge.strategic_prior
                 if knowledge.strategic_prior:
                     reasons.append(
@@ -163,7 +266,7 @@ class DraftPolicy:
                 continuity = min(12.0, owned * 2.5)
                 score += continuity
                 reasons.append(f"continuidade com {owned} unidade(s) +{continuity:.1f}")
-                if card.effect == "upgrade":
+                if normalized_effect == "upgrade":
                     score += 12.0
                     reasons.append("upgrade aplicado a unidade já escolhida +12")
 

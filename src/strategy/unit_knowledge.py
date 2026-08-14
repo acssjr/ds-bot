@@ -24,14 +24,37 @@ class UnitKnowledge:
     roles: frozenset[str]
     base_health: float
     base_damage: float
+    stat_multiplier_per_level: float
     early_spawn: int
     late_spawn: int
     move_speed: float
     attack_range: float
     attack_cycle_seconds: float | None
+    direct_damage_events_per_cycle: int
     behaviour: tuple[tuple[str, int | float], ...]
     community_tier: str
     strategic_prior: float
+
+
+@dataclass(frozen=True, slots=True)
+class TransformationTier:
+    unit: str
+    tier: int
+    label: str
+    unit_type: int
+    health_multiplier: float
+    damage_multiplier: float
+    attack_cycle_seconds: float | None
+    damage_events_per_cycle: int
+    move_speed: float
+    revive_health_multiplier: float
+    revive_damage_multiplier: float
+    summon_interval_seconds: float | None
+    multiplier_min: int
+    multiplier_max: int
+    description: str
+    source_conflict: str | None
+    declared_damage_rate_multiplier: float | None
 
 
 # These labels are policy metadata, kept apart from the APK facts below.  The
@@ -79,11 +102,17 @@ def _unit(name: str) -> UnitKnowledge:
         frozenset(roles),
         float(facts["health"]),
         float(facts["damage"]),
+        float(facts["stat_multiplier_per_level"]),
         int(facts["spawn_early"]),
         int(facts["spawn_late"]),
         float(facts["move_speed"]),
         float(facts["attack_range"]),
         float(animation["cycle_seconds"]) if animation else None,
+        sum(
+            1
+            for event in (animation or {}).get("events", ())
+            if event.get("name") in {"OnAttack", "OnShoot"}
+        ),
         tuple(sorted(facts.get("behaviour", {}).items())),
         tier,
         float(prior),
@@ -160,3 +189,107 @@ def unit_count_tendency(
     group = min(5, max(1, int(spawn_group)))
     count = min(24, max(0, int(current_count)))
     return int(GAME_DATA["unit_count_scores"][f"x{group} {suffix}"][count])
+
+
+def transformation_tier(
+    unit: str | None,
+    tier: int = 1,
+) -> TransformationTier | None:
+    """Return the APK-backed tier for a base unit family."""
+
+    knowledge = unit_for(unit)
+    if knowledge is None:
+        return None
+    family = GAME_DATA.get("transformations", {}).get(knowledge.internal_name)
+    if not family:
+        return None
+    normalized_tier = min(3, max(1, int(tier)))
+    raw = next(
+        (entry for entry in family["tiers"] if entry["tier"] == normalized_tier),
+        None,
+    )
+    if raw is None:
+        return None
+    return TransformationTier(
+        unit=knowledge.internal_name,
+        tier=int(raw["tier"]),
+        label=str(raw["label"]),
+        unit_type=int(raw["unit_type"]),
+        health_multiplier=float(raw["health_multiplier"]),
+        damage_multiplier=float(raw["damage_multiplier"]),
+        attack_cycle_seconds=(
+            float(raw["attack_cycle_seconds"])
+            if raw.get("attack_cycle_seconds") is not None
+            else None
+        ),
+        damage_events_per_cycle=int(raw.get("damage_events_per_cycle", 0)),
+        move_speed=float(raw.get("move_speed", knowledge.move_speed)),
+        revive_health_multiplier=float(raw.get("revive_health_multiplier", 0.0)),
+        revive_damage_multiplier=float(raw.get("revive_damage_multiplier", 0.0)),
+        summon_interval_seconds=(
+            float(raw["summon_interval_seconds"])
+            if raw.get("summon_interval_seconds") is not None
+            else None
+        ),
+        multiplier_min=int(raw["multiplier_min"]),
+        multiplier_max=int(raw["multiplier_max"]),
+        description=str(raw.get("description", "Base unit.")),
+        source_conflict=(
+            str(raw["source_conflict"]) if raw.get("source_conflict") else None
+        ),
+        declared_damage_rate_multiplier=(
+            float(raw["declared_damage_rate_multiplier"])
+            if raw.get("declared_damage_rate_multiplier") is not None
+            else None
+        ),
+    )
+
+
+def transformation_combat_factor(unit: str | None, tier: int = 1) -> float:
+    """Estimate whole-life body value from explicit APK tier mechanics.
+
+    Health exposure and damage throughput receive equal weight. Resurrection,
+    mobility and summoning are added from their concrete prefab parameters;
+    counter/synergy tables remain separate policy inputs.
+    """
+
+    current = transformation_tier(unit, tier)
+    base = transformation_tier(unit, 1)
+    if current is None or base is None:
+        return 1.0
+    damage_rate = transformation_damage_rate_factor(unit, tier)
+    health_exposure = current.health_multiplier + current.revive_health_multiplier
+    damage_exposure = damage_rate + current.revive_damage_multiplier
+    value = (health_exposure + damage_exposure) / 2.0
+    if current.move_speed > base.move_speed > 0:
+        value += 0.10 * (current.move_speed / base.move_speed - 1.0)
+    if (
+        current.summon_interval_seconds
+        and base.summon_interval_seconds
+        and current.summon_interval_seconds > 0
+    ):
+        value += 0.35 * (
+            base.summon_interval_seconds / current.summon_interval_seconds - 1.0
+        )
+    return value
+
+
+def transformation_damage_rate_factor(unit: str | None, tier: int = 1) -> float:
+    """Return direct damage-event throughput, excluding lifetime abilities."""
+
+    current = transformation_tier(unit, tier)
+    base = transformation_tier(unit, 1)
+    if current is None or base is None:
+        return 1.0
+    if current.declared_damage_rate_multiplier is not None:
+        return current.declared_damage_rate_multiplier
+    if (
+        current.attack_cycle_seconds
+        and current.damage_events_per_cycle
+        and base.attack_cycle_seconds
+        and base.damage_events_per_cycle
+    ):
+        return current.damage_multiplier * (
+            current.damage_events_per_cycle / current.attack_cycle_seconds
+        ) / (base.damage_events_per_cycle / base.attack_cycle_seconds)
+    return current.damage_multiplier

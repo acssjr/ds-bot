@@ -14,10 +14,13 @@ from src.capture.manager import CaptureManager
 from src.core.cancellation import CancellationToken
 from src.core.events import LoggingEventSink
 from src.device.session import DeviceSession
+from src.device.profile_reader import AdbProfileReader
 from src.recording.session_recorder import SessionRecorder
 from src.recovery.app_supervisor import RewardedAdAppSupervisor
 from src.utils.logging_config import setup_logger
 from src.vision.legacy_adapter import LegacyVisionAdapter
+from src.vision.resource_reader import ResourceReader
+from src.strategy.draft_policy import DraftPolicy
 
 
 def _serial(value: str) -> str:
@@ -70,10 +73,24 @@ def main(argv: list[str] | None = None) -> int:
         events = LoggingEventSink(logger)
         cancellation = CancellationToken()
         GameLauncher(session, events=events).ensure_foreground(cancellation)
+        account_reader = AdbProfileReader(session)
+        try:
+            account = account_reader.read()
+        except Exception as exc:
+            account = None
+            logger.warning(
+                "Direct ADB account profile unavailable; continuing with APK facts and OCR: {!r}",
+                exc,
+            )
         recorder = SessionRecorder()
         runner = BattleRunner(
             capture=capture,
-            perception=LegacyVisionAdapter(),
+            perception=LegacyVisionAdapter(
+                resource_reader=ResourceReader(
+                    state_path="datasets/account_state.json",
+                    account_reader=account_reader,
+                )
+            ),
             input_backend=LiveAdbInput(session=session, events=events),
             cancellation=cancellation,
             settings=BattleSettings(
@@ -82,6 +99,7 @@ def main(argv: list[str] | None = None) -> int:
             recorder=recorder,
             events=events,
             recovery=RewardedAdAppSupervisor(session),
+            draft_policy=DraftPolicy(account),
         )
         logger.warning(
             "LIVE INPUT ENABLED for one battle on {}; rewarded ads and bounded mastery boosts enabled; real-money, gem and coin purchases disabled",

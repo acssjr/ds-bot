@@ -180,6 +180,7 @@ class BattleRunner:
         self._draft_policy = draft_policy or DraftPolicy()
         self._recovery = recovery
         self._draft_history: dict[str, int] = {}
+        self._draft_tiers: dict[str, int] = {}
         self._victory_reward_claimed = False
         self._double_bits_claimed = False
         self._boost_attempted_slots: set[int] = set()
@@ -264,6 +265,25 @@ class BattleRunner:
         return float(np.mean(cv2.absdiff(before, after))) / 255.0
 
     @staticmethod
+    def _draft_fingerprint(raw_choices: object) -> tuple[tuple[object, ...], ...]:
+        if not isinstance(raw_choices, (tuple, list)):
+            return ()
+        result: list[tuple[object, ...]] = []
+        for raw in raw_choices:
+            if not isinstance(raw, Mapping):
+                continue
+            result.append(
+                (
+                    raw.get("slot"),
+                    str(raw.get("unit") or ""),
+                    str(raw.get("effect") or "unknown"),
+                    raw.get("magnitude", 1),
+                    str(raw.get("text") or ""),
+                )
+            )
+        return tuple(result)
+
+    @staticmethod
     def _pixel(point: tuple[float, float], frame: Frame) -> PixelPoint:
         x = min(frame.size.width - 1, max(0, round(point[0] * (frame.size.width - 1))))
         y = min(frame.size.height - 1, max(0, round(point[1] * (frame.size.height - 1))))
@@ -319,6 +339,7 @@ class BattleRunner:
             decision = self._draft_policy.choose(
                 cards,
                 history=self._draft_history,
+                tiers=self._draft_tiers,
                 variant=str(observation.get("draft_variant") or "normal_pick"),
                 enemy_units=(
                     tuple(observation.get("enemy_units", ()))
@@ -334,7 +355,13 @@ class BattleRunner:
             return _Intent(
                 ActionName.PICK_DRAFT,
                 (self._DRAFT_X[slot], 0.54),
-                frozenset({BattlePhase.COMBAT}),
+                frozenset(
+                    {
+                        BattlePhase.DRAFT_PICK,
+                        BattlePhase.RECOVERY_BONUS,
+                        BattlePhase.COMBAT,
+                    }
+                ),
                 {
                     "slot": slot,
                     "variant": phase.value,
@@ -348,6 +375,7 @@ class BattleRunner:
                         else 1
                     ),
                     "decision": decision.payload(),
+                    "draft_fingerprint": self._draft_fingerprint(raw_choices),
                 },
             )
         if phase is BattlePhase.VICTORY_SPLASH:
@@ -600,9 +628,22 @@ class BattleRunner:
         logger.info("ACTION {} at {} from {}", intent.name.value, command.point.as_tuple(), phase.value)
         return pending
 
-    def _resolved(self, pending: _Pending, phase: BattlePhase, frame: Frame) -> bool:
+    def _resolved(
+        self,
+        pending: _Pending,
+        phase: BattlePhase,
+        frame: Frame,
+        observation: Mapping[str, Any],
+    ) -> bool:
         if phase not in pending.intent.success_phases:
             return False
+        if (
+            pending.intent.name is ActionName.PICK_DRAFT
+            and phase in {BattlePhase.DRAFT_PICK, BattlePhase.RECOVERY_BONUS}
+        ):
+            before = pending.intent.metadata.get("draft_fingerprint", ())
+            after = self._draft_fingerprint(observation.get("draft_choices", ()))
+            return bool(before and after and after != before)
         if phase is pending.before_phase:
             difference = self._visual_difference(pending.before_signature, self._signature(frame.image))
             return difference >= 0.035
@@ -702,7 +743,7 @@ class BattleRunner:
                     battle_finished = battle_seen or battle_finished
 
                 if pending is not None:
-                    if self._resolved(pending, phase, frame):
+                    if self._resolved(pending, phase, frame, observation):
                         selected_unit = pending.intent.metadata.get("selected_unit")
                         if pending.intent.name is ActionName.PICK_DRAFT and selected_unit:
                             observed_unit = str(selected_unit)
@@ -728,6 +769,11 @@ class BattleRunner:
                                 )
                             else:
                                 self._draft_history[unit] = max(initial_spawn, current)
+                                if effect in {"upgrade", "transform"}:
+                                    self._draft_tiers[unit] = min(
+                                        3,
+                                        self._draft_tiers.get(unit, 1) + 1,
+                                    )
                         flag = pending.intent.metadata.get("set_flag")
                         if flag == "victory_reward_claimed":
                             self._victory_reward_claimed = True

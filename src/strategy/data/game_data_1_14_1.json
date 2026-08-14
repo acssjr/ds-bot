@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "apk_version": "1.14.1",
   "sources": {
     "balance": "Resources/setups/UnitUpgradeSetup.txt",
@@ -8,7 +8,8 @@
     "synergy": "Resources/setups/DraftSynergySetup.txt",
     "counter_tendency": "Resources/setups/AiTendencySetup.txt",
     "movement_and_behaviour": "GameObject/Unit *.prefab",
-    "attack_timing": "AnimatorController + AnimationClip"
+    "attack_timing": "AnimatorController + AnimationClip",
+    "transformations": "CardSetup Upgrade/Multiplier + LocData + Unit tier prefabs"
   },
   "unit_order": [
     "Knight",
@@ -1039,6 +1040,45 @@
         ]
       },
       "behaviour": {}
+    }
+  },
+  "transformations": {
+    "Knight": {
+      "tiers": [
+        {"tier": 1, "label": "base", "unit_type": 0, "health_multiplier": 1.0, "damage_multiplier": 1.0, "attack_cycle_seconds": 0.583333, "damage_events_per_cycle": 2, "move_speed": 3.0, "multiplier_min": 6, "multiplier_max": 12},
+        {"tier": 2, "label": "advanced", "unit_type": 5, "health_multiplier": 1.5, "damage_multiplier": 1.3, "attack_cycle_seconds": 0.75, "damage_events_per_cycle": 2, "move_speed": 3.0, "multiplier_min": 6, "multiplier_max": 12, "description": "Health 150%; Damage 130%."},
+        {"tier": 3, "label": "elite", "unit_type": 24, "health_multiplier": 2.0, "damage_multiplier": 3.0, "attack_cycle_seconds": 1.15, "damage_events_per_cycle": 2, "move_speed": 3.0, "multiplier_min": 6, "multiplier_max": 12, "description": "Health 200%; UI says Damage 160%; active prefab class multiplier is 300% with a slower attack cycle.", "source_conflict": "LocData damage=1.6; Unit Knight3.prefab damageMultiplierToBaseClass=3.0"}
+      ],
+      "upgrade_minimum": 6,
+      "upgrade_maximum": 100
+    },
+    "Cupid": {
+      "tiers": [
+        {"tier": 1, "label": "base", "unit_type": 1, "health_multiplier": 1.0, "damage_multiplier": 1.0, "attack_cycle_seconds": 1.0, "damage_events_per_cycle": 1, "move_speed": 2.0, "multiplier_min": 6, "multiplier_max": 12},
+        {"tier": 2, "label": "advanced", "unit_type": 7, "health_multiplier": 1.0, "damage_multiplier": 0.7, "declared_damage_rate_multiplier": 1.5, "attack_cycle_seconds": 1.183333, "damage_events_per_cycle": 2, "move_speed": 2.0, "multiplier_min": 6, "multiplier_max": 12, "description": "Attack Speed 150%; the advanced animation fires twice per cycle."},
+        {"tier": 3, "label": "elite", "unit_type": 25, "health_multiplier": 2.0, "damage_multiplier": 0.8, "declared_damage_rate_multiplier": 1.5, "attack_cycle_seconds": 1.183333, "damage_events_per_cycle": 2, "move_speed": 2.0, "multiplier_min": 6, "multiplier_max": 12, "description": "Attack Speed 150%; Health 200%; the elite reuses the two-shot advanced animation."}
+      ],
+      "upgrade_minimum": 6,
+      "upgrade_maximum": 100
+    },
+    "Goose": {
+      "tiers": [
+        {"tier": 1, "label": "base", "unit_type": 4, "health_multiplier": 1.0, "damage_multiplier": 1.0, "attack_cycle_seconds": 0.316667, "damage_events_per_cycle": 1, "move_speed": 10.0, "revive_health_multiplier": 0.0, "revive_damage_multiplier": 0.0, "multiplier_min": 10, "multiplier_max": 20},
+        {"tier": 2, "label": "advanced_zombie", "unit_type": 11, "health_multiplier": 1.0, "damage_multiplier": 1.0, "attack_cycle_seconds": 0.316667, "damage_events_per_cycle": 1, "move_speed": 10.0, "revive_health_multiplier": 0.4, "revive_damage_multiplier": 0.4, "revive_delay_seconds": 0.5, "multiplier_min": 10, "multiplier_max": 20, "description": "Revives once after death with 40% Health and Damage."},
+        {"tier": 3, "label": "elite_zombie", "unit_type": 26, "health_multiplier": 1.3, "damage_multiplier": 1.2, "attack_cycle_seconds": 0.316667, "damage_events_per_cycle": 1, "move_speed": 15.0, "revive_health_multiplier": 0.4, "revive_damage_multiplier": 0.4, "revive_delay_seconds": 0.5, "multiplier_min": 10, "multiplier_max": 20, "description": "Health 130%; Damage 120%; revives once after death with 40% Health and Damage."}
+      ],
+      "upgrade_minimum": 10,
+      "upgrade_maximum": 100
+    },
+    "Engineer": {
+      "tiers": [
+        {"tier": 1, "label": "base", "unit_type": 89, "health_multiplier": 1.0, "damage_multiplier": 1.0, "attack_cycle_seconds": 0.583333, "damage_events_per_cycle": 2, "move_speed": 2.0, "summon_interval_seconds": 5.0, "summoned_unit_type": 92, "multiplier_min": 2, "multiplier_max": 4},
+        {"tier": 2, "label": "advanced", "unit_type": 90, "health_multiplier": 1.2, "damage_multiplier": 1.2, "attack_cycle_seconds": 0.583333, "damage_events_per_cycle": 2, "move_speed": 2.0, "summon_interval_seconds": 4.5, "summoned_unit_type": 92, "multiplier_min": 2, "multiplier_max": 4, "description": "Auto-Turret deployment interval 10% shorter; Engineer Health and Damage +20%."},
+        {"tier": 3, "label": "elite", "unit_type": 91, "health_multiplier": 1.4, "damage_multiplier": 1.4, "attack_cycle_seconds": 0.583333, "damage_events_per_cycle": 2, "move_speed": 2.0, "summon_interval_seconds": 4.0, "summoned_unit_type": 92, "multiplier_min": 2, "multiplier_max": 4, "description": "A second cumulative step: interval 20% shorter than base; Engineer Health and Damage +40% total."}
+      ],
+      "upgrade_minimum": 2,
+      "upgrade_maximum": 100,
+      "summoned_unit": {"unit_type": 92, "health_multiplier_to_engineer_base": 0.2, "damage_multiplier_to_engineer_base": 0.5, "lifetime_seconds_min": 5.0, "lifetime_seconds_max": 5.5, "attack_range": 8.0}
     }
   },
   "unit_count_scores": {

@@ -20,6 +20,7 @@ from src.core.cancellation import CancellationToken
 from src.core.events import EventBus, EventKind, RuntimeEvent
 from src.core.lifecycle import Lifecycle
 from src.device.session import DeviceSession
+from src.device.profile_reader import AdbProfileReader
 from src.gui.presenter import (
     format_runtime_error,
     format_runtime_event,
@@ -29,6 +30,8 @@ from src.runtime.bot_runtime import BotRuntime, RuntimeSettings
 from src.recording.session_recorder import SessionRecorder
 from src.recovery.app_supervisor import RewardedAdAppSupervisor
 from src.vision.legacy_adapter import LegacyVisionAdapter
+from src.vision.resource_reader import ResourceReader
+from src.strategy.draft_policy import DraftPolicy
 
 
 EVENT_POLL_MS = 100
@@ -112,6 +115,7 @@ def run_observer_worker(
                 timeout_seconds=ADB_SOCKET_TIMEOUT_SECONDS,
             )
             GameLauncher(session, events=events).ensure_foreground(cancellation)
+            account_reader = AdbProfileReader(session)
             source = ADBCaptureSource(session)
             capture = CaptureManager(
                 source,
@@ -120,7 +124,12 @@ def run_observer_worker(
             )
             runtime = BotRuntime(
                 capture=capture,
-                perception=LegacyVisionAdapter(),
+                perception=LegacyVisionAdapter(
+                    resource_reader=ResourceReader(
+                        state_path="datasets/account_state.json",
+                        account_reader=account_reader,
+                    )
+                ),
                 events=events,
                 lifecycle=Lifecycle(),
                 cancellation=cancellation,
@@ -162,6 +171,22 @@ def run_battle_worker(
         )
         session = DeviceSession(serial, timeout_seconds=ADB_SOCKET_TIMEOUT_SECONDS)
         GameLauncher(session, events=events).ensure_foreground(cancellation)
+        account_reader = AdbProfileReader(session)
+        try:
+            account = account_reader.read()
+        except Exception as exc:
+            account = None
+            events.publish(
+                RuntimeEvent(
+                    EventKind.AUTOMATION,
+                    time.monotonic(),
+                    {
+                        "category": "account",
+                        "status": "adb_profile_unavailable",
+                        "error": repr(exc),
+                    },
+                )
+            )
         capture = CaptureManager(
             ADBCaptureSource(session),
             device_serial=session.serial,
@@ -169,13 +194,19 @@ def run_battle_worker(
         )
         runner = BattleRunner(
             capture=capture,
-            perception=LegacyVisionAdapter(),
+            perception=LegacyVisionAdapter(
+                resource_reader=ResourceReader(
+                    state_path="datasets/account_state.json",
+                    account_reader=account_reader,
+                )
+            ),
             input_backend=LiveAdbInput(session=session, events=events),
             cancellation=cancellation,
             settings=BattleSettings(),
             recorder=SessionRecorder(),
             events=events,
             recovery=RewardedAdAppSupervisor(session),
+            draft_policy=DraftPolicy(account),
         )
         events.publish(
             RuntimeEvent(EventKind.LIFECYCLE, time.monotonic(), {"status": "running"})
@@ -877,7 +908,13 @@ class DraftShowdownGUI(ctk.CTk):
         unit_text = ", ".join(
             (
                 f"{unit.get('name', '?')} Nv.{unit.get('level', '?')}"
-                + (f" / M.{unit.get('mastery')}" if unit.get("mastery") is not None else "")
+                + (
+                    f" / {unit.get('mastery_points')} pts M"
+                    if unit.get("mastery_points") is not None
+                    else f" / M.{unit.get('mastery')}"
+                    if unit.get("mastery") is not None
+                    else ""
+                )
             )
             for unit in units
             if hasattr(unit, "get")
@@ -891,8 +928,19 @@ class DraftShowdownGUI(ctk.CTk):
         confidence = resources.get("resource_confidence")
         confidence_text = f" | confiança mínima {float(confidence):.0%}" if confidence is not None else ""
         status = str(event.payload.get("resource_ocr_status") or "cached")
+        win_rate = resources.get("win_rate")
+        match_summary = (
+            f" | Partidas: {value('wins', 0)}V/{value('losses', 0)}D"
+            + (f" ({float(win_rate):.1%})" if win_rate is not None else "")
+            if resources.get("matches") is not None
+            else ""
+        )
         self.lbl_resources_status.configure(
-            text=f"OCR: {'leitura nova' if status == 'fresh' else 'último valor confiável'}{confidence_text}"
+            text=(
+                f"Fonte: perfil direto via ADB{match_summary}"
+                if status == "adb" or resources.get("resource_source") == "adb_profile"
+                else f"OCR: {'leitura nova' if status == 'fresh' else 'último valor confiável'}{confidence_text}"
+            )
         )
 
     def _update_context_details(self, event: RuntimeEvent) -> None:

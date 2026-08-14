@@ -101,10 +101,8 @@ class DraftCardReader:
         elif multiplied is not None:
             effect = "multiply"
             magnitude = int(multiplied.group(1))
-        elif "up" in normalized:
+        elif "up" in normalized or "zumbi" in normalized:
             effect = "upgrade"
-        elif "zumbi" in normalized:
-            effect = "transform"
         confidence = (
             sum(score for _text, score in descriptive) / len(descriptive)
             if descriptive

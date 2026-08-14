@@ -76,6 +76,10 @@ Não há seleção implícita do primeiro emulador. Em modo ao vivo, `--frames` 
 .\.venv312\Scripts\python.exe -m src.gui.app
 ```
 
+No Windows, também é possível abrir a interface com duplo clique em
+[`abrir_gui.bat`](abrir_gui.bat). O launcher localiza o projeto pelo próprio
+diretório e inicia `pythonw`, sem manter uma janela de terminal aberta.
+
 A GUI descobre os dispositivos fora da thread do Tk e executa observação ou uma batalha, nunca ambos ao mesmo tempo. Quando há somente um dispositivo, ele é selecionado automaticamente e exibido com nome amigável (por exemplo, `MEmu · 127.0.0.1:21503`); com vários dispositivos, a seleção explícita continua obrigatória. O painel mostra inicialização do aplicativo, fase da FSM, ação pendente/confirmada, opções reconhecidas no draft, pontuação e justificativa da escolha, além de duração, `UNKNOWN`, saúde da captura, dataset e recursos. O retrato validado sobrevive a reinícios em `datasets/account_state.json`.
 
 ## Executor experimental de uma batalha
@@ -118,7 +122,7 @@ Anúncios recompensados e impulsos que consomem moeda M estão habilitados na ba
 - a presença de ofertas/atualização por anúncio e do contador de renovação diária já é observável; recursos da conta, troféus, nível, posição/pontos da Liga e unidades visíveis da Coleção possuem OCR especializado, enquanto temporizadores de ofertas/anúncios continuam `OCR_PENDING`;
 - recompensas especiais e algumas telas fora dos fluxos gravados ainda não possuem cobertura calibrada;
 - capturas reais podem permanecer em `UNKNOWN`, o que é esperado nesta fundação;
-- o executor reconhece os efeitos já observados (`+N`, `xN`, `UP` e transformação zumbi) e usa uma utilidade determinística com papéis, sinergia própria, counters e pressão visual inimiga; os pesos continuam auditáveis e devem ser calibrados com resultados reais, não tratados como uma tier list infalível;
+- o executor reconhece os efeitos já observados (`+N`, `xN` e `UP`, incluindo `Ganso zumbi!` como upgrade avançado), rastreia o tier de cada família e valoriza x2 de unidades transformadas com os multiplicadores do APK; os pesos continuam auditáveis e devem ser calibrados com resultados reais, não tratados como uma tier list infalível;
 - replay demonstra determinismo e segurança estrutural, mas não substitui a validação controlada de captura ao vivo no MEmu.
 
 ## Próximas etapas fechadas
@@ -132,4 +136,4 @@ A automação ativa só poderá ser habilitada depois de gates separados e verif
 5. confirmação por frame novo de cada pós-condição, implementada sem repetição cega;
 6. calibrar custos/benefícios dos impulsos e recompensas com resultados reais, mantendo orçamento explícito.
 
-Consulte a [análise estratégica do APK 1.14.1](docs/apk-strategy-analysis-1.14.1.md), a [arquitetura aprovada](docs/superpowers/specs/2026-08-13-draft-showdown-bot-architecture-design.md) e o [plano desta fundação](docs/superpowers/plans/2026-08-13-draft-showdown-safe-foundation.md) para os dados e contratos completos.
+Consulte a [análise estratégica do APK 1.14.1](docs/apk-strategy-analysis-1.14.1.md), o [estudo de duplicação por quantidade](docs/duplication-strategy-1.14.1.md), o [estudo técnico das transformações](docs/transformations-1.14.1.md), a [arquitetura aprovada](docs/superpowers/specs/2026-08-13-draft-showdown-bot-architecture-design.md) e o [plano desta fundação](docs/superpowers/plans/2026-08-13-draft-showdown-safe-foundation.md) para os dados e contratos completos.

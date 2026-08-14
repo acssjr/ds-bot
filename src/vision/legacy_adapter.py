@@ -15,9 +15,11 @@ class LegacyVisionAdapter:
     def __init__(
         self,
         templates_dir: str | PathLike[str] | None = None,
+        *,
+        resource_reader: ResourceReader | None = None,
     ) -> None:
         if templates_dir is None:
-            self._pipeline = self._pipeline_from_packaged_templates()
+            self._pipeline = self._pipeline_from_packaged_templates(resource_reader)
             return
 
         resolved = Path(templates_dir).expanduser().resolve()
@@ -25,11 +27,14 @@ class LegacyVisionAdapter:
             raise FileNotFoundError(f"templates directory does not exist: {resolved}")
         self._pipeline = VisionPipeline(
             templates_dir=str(resolved),
-            resource_reader=ResourceReader(state_path="datasets/account_state.json"),
+            resource_reader=resource_reader
+            or ResourceReader(state_path="datasets/account_state.json"),
         )
 
     @staticmethod
-    def _pipeline_from_packaged_templates() -> VisionPipeline:
+    def _pipeline_from_packaged_templates(
+        resource_reader: ResourceReader | None = None,
+    ) -> VisionPipeline:
         try:
             templates = resources.files("assets").joinpath("templates")
         except (ModuleNotFoundError, TypeError) as exc:
@@ -48,7 +53,8 @@ class LegacyVisionAdapter:
                 )
             return VisionPipeline(
                 templates_dir=str(materialized),
-                resource_reader=ResourceReader(state_path="datasets/account_state.json"),
+                resource_reader=resource_reader
+                or ResourceReader(state_path="datasets/account_state.json"),
             )
 
     def analyze(self, image, *, cancellation: CancellationToken | None = None) -> dict[str, Any]:

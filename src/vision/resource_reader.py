@@ -74,6 +74,8 @@ class ResourceReader:
         top_interval_seconds: float = 3.0,
         detail_interval_seconds: float = 30.0,
         state_path: str | PathLike[str] | None = None,
+        account_reader: Any | None = None,
+        adb_interval_seconds: float = 5.0,
     ) -> None:
         self._engine_factory = engine_factory or self._default_engine_factory
         self._engine: Any | None = None
@@ -85,6 +87,9 @@ class ResourceReader:
         self._last_screen = ScreenState.UNKNOWN
         self._state_path = Path(state_path) if state_path is not None else None
         self._snapshot: dict[str, Any] = self._load_snapshot()
+        self._account_reader = account_reader
+        self._adb_interval = float(adb_interval_seconds)
+        self._last_adb_at = float("-inf")
 
     def _load_snapshot(self) -> dict[str, Any]:
         if self._state_path is None or not self._state_path.is_file():
@@ -281,6 +286,22 @@ class ResourceReader:
         entered = screen is not self._last_screen
         self._last_screen = screen
         fresh = False
+        adb_fresh = False
+        if (
+            self._account_reader is not None
+            and now - self._last_adb_at >= self._adb_interval
+        ):
+            self._last_adb_at = now
+            try:
+                account = self._account_reader.read()
+                self._snapshot.update(account.resource_payload())
+                adb_fresh = True
+            except Exception as exc:
+                logger.warning(
+                    "Direct ADB profile read failed; retaining cache and using OCR: {!r}",
+                    exc,
+                )
+
         try:
             if screen in _MENU_SCREENS and now - self._last_top_at >= self._top_interval:
                 self._read_top(frame, screen)
@@ -314,5 +335,7 @@ class ResourceReader:
             return {"resource_ocr_status": "pending"}
         return {
             "resources": dict(self._snapshot),
-            "resource_ocr_status": "fresh" if fresh else "cached",
+            "resource_ocr_status": (
+                "adb" if adb_fresh else "fresh" if fresh else "cached"
+            ),
         }

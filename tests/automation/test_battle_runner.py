@@ -245,3 +245,127 @@ def test_missing_postcondition_stops_without_repeating_tap() -> None:
 
     assert len(input_backend.commands) == 1
     assert capture.stopped is True
+
+
+def test_consecutive_draft_cards_resolve_when_the_choice_set_changes() -> None:
+    first_choices = (
+        {
+            "slot": 0,
+            "text": "+5 Ganso",
+            "unit": "Ganso",
+            "effect": "add",
+            "magnitude": 5,
+            "confidence": 0.99,
+        },
+    )
+    second_choices = (
+        {
+            "slot": 1,
+            "text": "Gansos x2",
+            "unit": "Ganso",
+            "effect": "multiply",
+            "magnitude": 2,
+            "confidence": 0.99,
+        },
+    )
+    third_choices = (
+        {
+            "slot": 2,
+            "text": "Ganso zumbi!",
+            "unit": "Ganso",
+            "effect": "upgrade",
+            "magnitude": 1,
+            "confidence": 0.99,
+        },
+    )
+    observations = [
+        observation("HOME"),
+        observation("HOME"),
+        observation("WAIT_MATCHMAKING"),
+        observation("WAIT_MATCHMAKING"),
+        observation(
+            "DRAFT_SCREEN",
+            draft_available_slots=(0,),
+            draft_choices=first_choices,
+            draft_variant="normal_pick",
+        ),
+        observation(
+            "DRAFT_SCREEN",
+            draft_available_slots=(0,),
+            draft_choices=first_choices,
+            draft_variant="normal_pick",
+        ),
+        # The accepted tap advances from 1/3 to 2/3 without entering COMBAT.
+        observation(
+            "DRAFT_SCREEN",
+            draft_available_slots=(1,),
+            draft_choices=second_choices,
+            draft_variant="normal_pick",
+        ),
+        observation(
+            "DRAFT_SCREEN",
+            draft_available_slots=(1,),
+            draft_choices=second_choices,
+            draft_variant="normal_pick",
+        ),
+        observation(
+            "DRAFT_SCREEN",
+            draft_available_slots=(2,),
+            draft_choices=third_choices,
+            draft_variant="normal_pick",
+        ),
+        observation(
+            "DRAFT_SCREEN",
+            draft_available_slots=(2,),
+            draft_choices=third_choices,
+            draft_variant="normal_pick",
+        ),
+        observation("COMBAT"),
+        observation("COMBAT"),
+        observation("ROUND_RESULT"),
+        observation("VICTORY_SUMMARY", victory_phase="splash"),
+        observation("VICTORY_SUMMARY", victory_phase="splash"),
+        observation("VICTORY_SUMMARY", victory_phase="mastery_distribution"),
+        observation("VICTORY_SUMMARY", victory_phase="mastery_distribution"),
+        observation("VICTORY_SUMMARY", victory_phase="package_ready", continue_visible=True),
+        observation("VICTORY_SUMMARY", victory_phase="package_ready", continue_visible=True),
+        observation("VICTORY_SUMMARY", victory_phase="package_animating"),
+        observation(
+            "POST_BATTLE_OFFER",
+            offer_close_visible=True,
+            offer_close_point=(0.85, 0.30),
+        ),
+        observation(
+            "POST_BATTLE_OFFER",
+            offer_close_visible=True,
+            offer_close_point=(0.85, 0.30),
+        ),
+        observation("HOME"),
+        observation("HOME"),
+    ]
+    capture = ScriptedCapture(len(observations))
+    input_backend = RecordingInput()
+    runner = BattleRunner(
+        capture=capture,
+        perception=ScriptedPerception(observations),
+        input_backend=input_backend,
+        cancellation=CancellationToken(),
+        settings=BattleSettings(0, 0, stable_observations=2),
+        clock=lambda: 1.0,
+    )
+
+    result = runner.run()
+
+    assert result.completed is True
+    draft_taps = [
+        command
+        for command in input_backend.commands
+        if command.command_id.endswith("pick_draft")
+    ]
+    assert [command.point.x for command in draft_taps] == [
+        round(0.167 * 719),
+        round(0.500 * 719),
+        round(0.833 * 719),
+    ]
+    assert runner._draft_history["Goose"] == 10
+    assert runner._draft_tiers["Goose"] == 2
