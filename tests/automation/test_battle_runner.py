@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import random
-
 import numpy as np
 import pytest
 
@@ -131,7 +129,6 @@ def test_one_battle_waits_for_postconditions_and_closes_paid_offer() -> None:
         cancellation=CancellationToken(),
         settings=BattleSettings(0, 0, stable_observations=2),
         recorder=recorder,
-        rng=random.Random(0),
         clock=lambda: 1.0,
     )
 
@@ -147,8 +144,8 @@ def test_one_battle_waits_for_postconditions_and_closes_paid_offer() -> None:
         "continue_victory",
         "close_offer",
     ]
-    # Seed 0 selects slot 2 from the valid pair (1, 2), never the blank slot 0.
-    assert input_backend.commands[1].point.x == round(0.833 * 719)
+    # Unreadable candidates tie deterministically; slot 1 wins, never blank slot 0.
+    assert input_backend.commands[1].point.x == round(0.500 * 719)
     assert input_backend.commands[-1].point.y < 1280 // 2
     assert len([event for event in recorder.actions if event["event"] == "issued"]) == 6
     assert len([event for event in recorder.actions if event["event"] == "resolved"]) == 6

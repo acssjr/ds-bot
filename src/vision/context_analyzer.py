@@ -8,18 +8,25 @@ import numpy as np
 
 from src.state.game_state import ScreenState
 from src.vision.classifiers.screen_classifier import ScreenClassifier
+from src.vision.draft_reader import DraftCardReader
 
 
 class ContextAnalyzer:
     """Extract conservative, action-relevant facts after screen classification."""
 
-    def __init__(self, templates_dir: str | Path) -> None:
+    def __init__(
+        self,
+        templates_dir: str | Path,
+        *,
+        draft_reader: DraftCardReader | None = None,
+    ) -> None:
         templates = Path(templates_dir)
         indicators = templates / "indicators"
         self._free_ad_button = self._load(indicators / "free_ad_button.png")
         self._daily_refresh_label = self._load(indicators / "daily_refresh_label.png")
         self._daily_refresh_button = self._load(indicators / "daily_refresh_ad_button.png")
         self._recovery_banner = self._load(templates / "automation" / "recovery_banner_verified.png")
+        self._draft_reader = draft_reader or DraftCardReader()
 
     @staticmethod
     def _load(path: Path) -> np.ndarray | None:
@@ -63,10 +70,12 @@ class ContextAnalyzer:
     ) -> dict[str, Any]:
         if screen is ScreenState.DRAFT_SCREEN:
             slots = self._draft_available_slots(frame)
+            cards = self._draft_reader.read(frame, slots)
             return {
                 "context": "draft",
                 "draft_available_slots": slots,
                 "draft_variant": "recovery_bonus" if self._has_recovery_banner(frame) else "normal_pick",
+                "draft_choices": tuple(card.payload() for card in cards),
             }
         if screen is ScreenState.VICTORY_SUMMARY:
             return self._victory_context(frame, sub_element)

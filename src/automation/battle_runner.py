@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import random
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -16,9 +15,12 @@ from loguru import logger
 from src.capture.base_capture import CaptureTemporarilyUnavailable
 from src.capture.models import CaptureRequest, Frame
 from src.core.cancellation import Cancelled, CancellationToken
+from src.core.events import EventKind, EventSink, RuntimeEvent
 from src.geometry.models import PixelPoint
 from src.input.models import InputReceipt, TapCommand
 from src.state.game_state import ScreenState
+from src.strategy.draft_policy import DraftPolicy
+from src.vision.draft_reader import DraftCard
 
 
 class BattlePhase(str, Enum):
@@ -142,7 +144,8 @@ class BattleRunner:
         cancellation: CancellationToken,
         settings: BattleSettings = BattleSettings(),
         recorder: ActionRecorder | None = None,
-        rng: random.Random | None = None,
+        events: EventSink | None = None,
+        draft_policy: DraftPolicy | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._capture = capture
@@ -151,9 +154,25 @@ class BattleRunner:
         self._cancellation = cancellation
         self._settings = settings
         self._recorder = recorder
-        self._rng = rng or random.Random()
+        self._events = events
+        self._draft_policy = draft_policy or DraftPolicy()
+        self._draft_history: dict[str, int] = {}
         self._clock = clock
         self._command_sequence = 0
+
+    def _publish_automation(self, status: str, **payload: object) -> None:
+        if self._events is None:
+            return
+        try:
+            self._events.publish(
+                RuntimeEvent(
+                    EventKind.AUTOMATION,
+                    self._clock(),
+                    {"category": "battle", "status": status, **payload},
+                )
+            )
+        except Exception:
+            pass
 
     @staticmethod
     def _screen(observation: Mapping[str, Any]) -> ScreenState:
@@ -222,12 +241,59 @@ class BattleRunner:
             slots = tuple(slot for slot in raw_slots if type(slot) is int and 0 <= slot <= 2)
             if not slots:
                 return None
-            slot = self._rng.choice(slots)
+            raw_choices = observation.get("draft_choices", ())
+            cards: list[DraftCard] = []
+            if isinstance(raw_choices, (tuple, list)):
+                for raw in raw_choices:
+                    if not isinstance(raw, Mapping):
+                        continue
+                    try:
+                        slot = int(raw.get("slot", -1))
+                        if slot not in slots:
+                            continue
+                        effect = str(raw.get("effect") or "unknown")
+                        if effect not in {"add", "multiply", "upgrade", "transform", "unknown"}:
+                            effect = "unknown"
+                        cards.append(
+                            DraftCard(
+                                slot=slot,
+                                text=str(raw.get("text") or "OCR_UNREADABLE"),
+                                unit=str(raw["unit"]) if raw.get("unit") else None,
+                                effect=effect,
+                                magnitude=max(1, int(raw.get("magnitude", 1))),
+                                confidence=min(
+                                    1.0,
+                                    max(0.0, float(raw.get("confidence", 0.0))),
+                                ),
+                            )
+                        )
+                    except (TypeError, ValueError):
+                        continue
+            known_slots = {card.slot for card in cards}
+            cards.extend(
+                DraftCard(slot, "OCR_UNREADABLE", None, "unknown", 1, 0.0)
+                for slot in slots
+                if slot not in known_slots
+            )
+            decision = self._draft_policy.choose(
+                cards,
+                history=self._draft_history,
+                variant=str(observation.get("draft_variant") or "normal_pick"),
+            )
+            slot = decision.selected_slot
+            selected = next(card for card in cards if card.slot == slot)
             return _Intent(
                 ActionName.PICK_DRAFT,
                 (self._DRAFT_X[slot], 0.54),
                 frozenset({BattlePhase.COMBAT}),
-                {"slot": slot, "variant": phase.value},
+                {
+                    "slot": slot,
+                    "variant": phase.value,
+                    "selected_unit": selected.unit,
+                    "selected_effect": selected.effect,
+                    "selected_magnitude": selected.magnitude,
+                    "decision": decision.payload(),
+                },
             )
         if phase is BattlePhase.VICTORY_SPLASH:
             return _Intent(
@@ -308,6 +374,14 @@ class BattleRunner:
                 "metadata": dict(intent.metadata),
             }
         )
+        self._publish_automation(
+            "action_issued",
+            action=intent.name.value,
+            command_id=command.command_id,
+            point=command.point.as_tuple(),
+            phase=phase.value,
+            metadata=dict(intent.metadata),
+        )
         logger.info("ACTION {} at {} from {}", intent.name.value, command.point.as_tuple(), phase.value)
         return pending
 
@@ -348,6 +422,13 @@ class BattleRunner:
                 observation["frame_id"] = frame.id
                 phase = self.phase_for(observation)
                 frames += 1
+                if self._events is not None:
+                    try:
+                        self._events.publish(
+                            RuntimeEvent(EventKind.OBSERVATION, self._clock(), observation)
+                        )
+                    except Exception:
+                        pass
                 if self._recorder is not None:
                     self._recorder.record(frame, observation)
 
@@ -356,6 +437,12 @@ class BattleRunner:
                 else:
                     last_phase = phase
                     stable_count = 1
+                    self._publish_automation(
+                        "phase_changed",
+                        phase=phase.value,
+                        frame_id=frame.id,
+                        confidence=float(observation.get("confidence", 0.0)),
+                    )
                 logger.info("STATE frame={} phase={} confidence={:.1%}", frame.id, phase.value, float(observation.get("confidence", 0.0)))
 
                 if phase in {
@@ -377,6 +464,18 @@ class BattleRunner:
 
                 if pending is not None:
                     if self._resolved(pending, phase, frame):
+                        selected_unit = pending.intent.metadata.get("selected_unit")
+                        if pending.intent.name is ActionName.PICK_DRAFT and selected_unit:
+                            unit = str(selected_unit)
+                            current = self._draft_history.get(unit, 0)
+                            effect = str(pending.intent.metadata.get("selected_effect") or "unknown")
+                            magnitude = int(pending.intent.metadata.get("selected_magnitude") or 1)
+                            if effect == "add":
+                                self._draft_history[unit] = current + magnitude
+                            elif effect == "multiply":
+                                self._draft_history[unit] = current * magnitude if current else magnitude
+                            else:
+                                self._draft_history[unit] = max(1, current)
                         self._audit(
                             {
                                 "event": "resolved",
@@ -385,6 +484,13 @@ class BattleRunner:
                                 "frame_id": frame.id,
                                 "phase": phase.value,
                             }
+                        )
+                        self._publish_automation(
+                            "action_resolved",
+                            action=pending.intent.name.value,
+                            command_id=pending.command.command_id,
+                            phase=phase.value,
+                            frame_id=frame.id,
                         )
                         pending = None
                     elif self._clock() - pending.issued_at > self._settings.postcondition_timeout_seconds:
@@ -397,6 +503,12 @@ class BattleRunner:
                                 "phase": phase.value,
                             }
                         )
+                        self._publish_automation(
+                            "action_timeout",
+                            action=pending.intent.name.value,
+                            command_id=pending.command.command_id,
+                            phase=phase.value,
+                        )
                         raise ActionPostconditionTimeout(
                             f"{pending.intent.name.value} did not reach a visual postcondition"
                         )
@@ -404,6 +516,12 @@ class BattleRunner:
                     continue
 
                 if phase is BattlePhase.HOME and battle_finished:
+                    self._publish_automation(
+                        "completed",
+                        phase=phase.value,
+                        frames=frames,
+                        actions=actions,
+                    )
                     return BattleResult(True, frames, actions, phase)
 
                 if stable_count >= self._settings.stable_observations:

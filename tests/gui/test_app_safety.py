@@ -61,14 +61,25 @@ def test_gui_source_has_no_legacy_planner_or_live_input_path() -> None:
     )
 
 
-def test_observe_only_entrypoints_do_not_import_opt_in_automation() -> None:
-    gui_source = APP_PATH.read_text(encoding="utf-8")
+def test_cli_stays_observe_only_while_gui_exposes_separate_opt_in_worker() -> None:
     cli_source = Path("src/main.py").read_text(encoding="utf-8")
+    assert "BattleRunner" not in cli_source
+    assert "LiveAdbInput" not in cli_source
+    battle = _function(_tree(), "run_battle_worker")
+    names = {node.id for node in ast.walk(battle) if isinstance(node, ast.Name)}
+    assert {"BattleRunner", "LiveAdbInput", "GameLauncher"} <= names
 
-    for source in (gui_source, cli_source):
-        assert "BattleRunner" not in source
-        assert "LiveAdbInput" not in source
-        assert "src.automation" not in source
+
+def test_gui_battle_requires_human_confirmation_before_worker_creation() -> None:
+    method = _method(_tree(), "DraftShowdownGUI", "start_battle")
+    calls = [
+        (_called_name(node), node.lineno)
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call)
+    ]
+    confirm_line = min(line for name, line in calls if name == "askyesno")
+    worker_line = min(line for name, line in calls if name == "_thread_factory")
+    assert confirm_line < worker_line
 
 
 def test_observer_worker_is_tk_independent_and_uses_safe_runtime() -> None:
@@ -116,10 +127,12 @@ def test_device_discovery_uses_a_finite_socket_timeout_off_tk_path() -> None:
     assert 0 < timeout.value <= 10
 
 
-def test_gui_copy_describes_observation_not_active_automation() -> None:
+def test_gui_copy_separates_observation_from_one_battle_automation() -> None:
     source = APP_PATH.read_text(encoding="utf-8")
 
-    assert "OBSERVAÇÃO" in source
+    assert "Iniciar observação" in source
+    assert "Executar 1 batalha" in source
+    assert "Compras, anúncios, impulsos e gastos" in source
     assert "Iniciar Bot" not in source
     assert "RODANDO" not in source
     assert "Configurações & Ads" not in source

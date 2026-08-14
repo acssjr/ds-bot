@@ -16,8 +16,6 @@ def test_live_executor_accepts_bounded_explicit_invocation() -> None:
             "--device",
             "127.0.0.1:21503",
             "--confirm-live-input",
-            "--seed",
-            "7",
             "--max-minutes",
             "20",
         ]
@@ -25,7 +23,6 @@ def test_live_executor_accepts_bounded_explicit_invocation() -> None:
 
     assert args.device == "127.0.0.1:21503"
     assert args.confirm_live_input is True
-    assert args.seed == 7
     assert args.max_minutes == 20
 
 

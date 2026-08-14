@@ -184,7 +184,7 @@ Quando continuar o desenvolvimento no ChatGPT, sugere-se seguir a seguinte ordem
 
 ## 8. ATUALIZAÇÃO VALIDADA — 13/08/2026
 
-Esta seção substitui afirmações antigas deste documento quando houver conflito. O runtime principal continua **observe-first**: a GUI ainda não executa gameplay automaticamente. Os taps da partida descrita abaixo foram enviados por um executor experimental supervisionado, fora do entrypoint seguro da GUI.
+Esta seção substitui afirmações antigas deste documento quando houver conflito. A CLI principal continua **observe-first**. A GUI agora separa observação de um executor supervisionado de exatamente uma batalha; o caminho ativo exige confirmação humana e mantém gastos, anúncios e impulsos bloqueados.
 
 ### Estado atual validado
 
@@ -193,7 +193,7 @@ Esta seção substitui afirmações antigas deste documento quando houver confli
 * Reconhecimento cobre HOME, Coleção, Loja, ofertas diárias, Liga, matchmaking, draft, combate, resultado e vitória, além dos estados de anúncios já documentados.
 * RapidOCR com ONNX Runtime lê regiões específicas e mantém o último retrato confiável em `datasets/account_state.json`.
 * A aba `Recursos` da GUI mostra energia, gemas, moedas, moeda M, troféus, nível, Liga, coleção e unidades visíveis com nível/maestria.
-* Última suíte completa executada: **292 testes aprovados**.
+* A GUI mostra inicialização do app, fase, ação/pós-condição e análise pontuada do draft.
 
 ### Sessão real completa `20260813_173817_477`
 
@@ -226,9 +226,9 @@ Popup interno `Pack Comandante`, duração `23h59`, preço `R$ 26,99`. O classif
 
 Adicionar o estado `POST_BATTLE_OFFER`. O botão seguro de fechar, na referência 720×1280, foi medido em `bbox=(588,403,56,57)`, centro `(616,432)` e posição normalizada `(0.856,0.337)`. Detectar o X visualmente; a coordenada é apenas validação. Enviar um único tap e confirmar que o X/sombreamento desapareceram e a HOME voltou. Nunca tocar no botão de preço. Essa oferta não é anúncio externo e não usa a recuperação de Google Play/navegador.
 
-### Próxima implementação recomendada
+### FSM recomendada e implementada
 
-Construir uma FSM de batalha isolada, inicialmente com escolha aleatória entre slots visualmente válidos:
+A FSM isolada usa somente slots visualmente válidos:
 
 `HOME → WAIT_MATCHMAKING → DRAFT/RECOVERY_BONUS ↔ COMBAT → ROUND_RESULT → VICTORY_* → POST_BATTLE_OFFER? → LEAGUE_MENU? → HOME`
 
@@ -236,7 +236,9 @@ Estados passivos (`WAIT_MATCHMAKING`, `COMBAT`, `ROUND_RESULT` e animações) n�
 
 ### Implementado em 14/08/2026
 
-O primeiro executor isolado está disponível em `src/automation/` e não é importado pela GUI nem por `src.main`. Ele implementa a FSM acima com escolhas aleatórias apenas entre slots visualmente preenchidos, backend ADB auditável, orçamento de ações, pós-condição sem repetição cega, fechamento seguro de `POST_BATTLE_OFFER` e gravação de `actions.jsonl` junto ao dataset.
+O executor está em `src/automation/` e continua fora de `src.main`; a GUI o usa somente no botão confirmado **Executar 1 batalha**. `GameLauncher` conecta ao serial explícito, detecta o launcher do MEmu, abre `com.QuestLab.DraftWar` e aguarda o primeiro plano sem taps de gameplay. A FSM mantém backend ADB auditável, orçamento de ações, pós-condição sem repetição cega, fechamento seguro de `POST_BATTLE_OFFER` e gravação de `actions.jsonl`.
+
+O draft deixou de ser aleatório. `DraftCardReader` aplica RapidOCR apenas aos slots visualmente válidos e normaliza unidade, efeito e magnitude. `DraftPolicy` pontua deterministicamente volume (`+N`), multiplicador (`xN`), upgrade de unidade presente, transformação, continuidade, diversidade e confiança. Todos os candidatos, notas e motivos são publicados na GUI. Esses pesos são um viés racional inicial; uma política baseada em matchup/taxa de vitória depende de acumular resultados rotulados.
 
 Execução explícita:
 
@@ -244,7 +246,7 @@ Execução explícita:
 .\.venv312\Scripts\python.exe -m src.automation.main --device 127.0.0.1:21503 --confirm-live-input
 ```
 
-Antes do próximo teste ao vivo, executar a suíte e iniciar com o jogo na HOME. O próximo incremento funcional é interpretar nome, quantidade, efeito, nível e maestria das cartas para substituir a escolha aleatória por estratégia; anúncios, impulsos e qualquer gasto continuam fora do executor.
+Antes do próximo teste ao vivo, executar a suíte. O MEmu pode estar no launcher: o bot abre o jogo e espera a HOME. O próximo incremento de estratégia é correlacionar escolhas, adversário e vitória/derrota para calibrar os pesos; anúncios, impulsos e qualquer gasto continuam fora do executor.
 
 ---
 

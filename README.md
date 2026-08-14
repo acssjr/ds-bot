@@ -2,19 +2,19 @@
 
 Fundação para automação visual confiável de **uma conta do Draft Showdown em uma única instância do MEmu**, escolhida explicitamente pelo número de série ADB.
 
-## Estado atual: observação segura e executor experimental isolado
+## Estado atual: observação segura e uma batalha supervisionada
 
-A CLI padrão e a GUI continuam observe-only e usam o mesmo `BotRuntime` para capturar frames e publicar observações; na GUI, existe apenas uma recuperação limitada para anúncios que abrem outro aplicativo. Um segundo entrypoint, separado e explicitamente confirmado, executa exatamente uma batalha com escolhas aleatórias entre slots válidos e pós-condições visuais. O runtime padrão:
+A CLI padrão continua observe-only. A GUI separa explicitamente **Iniciar observação** de **Executar 1 batalha**; o segundo exige confirmação humana e envia taps reais. Tanto a observação quanto o executor conseguem abrir `com.QuestLab.DraftWar` a partir da tela inicial do MEmu e aguardam o jogo chegar ao primeiro plano. O executor usa OCR e uma política determinística explicável para comparar as cartas visualmente válidas. O runtime padrão:
 
 - captura automaticamente a tela nativa do Android via ADB, ou reproduz imagens gravadas;
 - alterna entre `adb exec-out`, captura shell e `adbutils` quando o MEmu devolve frames pretos transitórios; após falhas consecutivas, renova o handle ADB sem encerrar a observação;
 - na GUI, grava automaticamente um dataset seletivo em `datasets/sessions/`, priorizando transições, `UNKNOWN`, mudanças visuais e amostras periódicas;
 - processa apenas a instância MEmu selecionada explicitamente;
-- **não envia taps ou swipes de gameplay**; somente `src.automation.main` pode fazê-lo após `--confirm-live-input`;
+- **Iniciar observação não envia taps ou swipes de gameplay**; somente a CLI confirmada ou o botão confirmado **Executar 1 batalha** habilitam entrada;
 - na GUI, depois que um anúncio recompensado foi reconhecido, verifica o pacote Android em primeiro plano: se Play Store, navegador ou outro app externo foi aberto, tenta `Voltar`, depois reabrir e, como último fallback, reiniciar apenas o Draft Showdown;
 - encerra de forma cooperativa e registra eventos de ciclo de vida, frame, observação e erro.
 
-Os módulos legados de planejamento e entrada ainda existem no código como referência. Eles não são importados nem acionados pelos entrypoints observe-only. O executor experimental usa uma FSM nova e isolada, sem reaproveitar o controlador legado.
+Os módulos legados de planejamento e entrada ainda existem no código como referência. O executor usa uma FSM nova e isolada, sem reaproveitar o controlador legado.
 
 ## Requisitos
 
@@ -76,22 +76,24 @@ Não há seleção implícita do primeiro emulador. Em modo ao vivo, `--frames` 
 .\.venv312\Scripts\python.exe -m src.gui.app
 ```
 
-A GUI descobre os dispositivos fora da thread do Tk e executa a mesma fundação `BotRuntime` em uma thread de trabalho. Quando há somente um dispositivo, ele é selecionado automaticamente e exibido com nome amigável (por exemplo, `MEmu · 127.0.0.1:21503`); com vários dispositivos, a seleção explícita continua obrigatória. Eventos são consumidos pela thread da interface. A descoberta e a sessão ADB da GUI usam timeout de inatividade de 5 segundos. O painel mostra duração e estabilidade da sessão, observações, transições, taxa de `UNKNOWN`, frames válidos, pretos descartados, recuperações, estratégia de captura, recuperação de aplicativo externo, imagens salvas e o último retrato confiável dos recursos da conta. Energia, gemas, moedas, moeda de maestria, troféus e nível são lidos em regiões específicas; Coleção e Liga recebem uma leitura detalhada ao entrar na respectiva tela. O retrato validado sobrevive a reinícios em `datasets/account_state.json`. Os arquivos JPEG e o `observations.jsonl` ficam numa pasta de sessão em `datasets/sessions/`; frames repetidos são deduplicados para limitar uso de disco. Pausa e automação de gameplay permanecem desabilitadas.
+A GUI descobre os dispositivos fora da thread do Tk e executa observação ou uma batalha, nunca ambos ao mesmo tempo. Quando há somente um dispositivo, ele é selecionado automaticamente e exibido com nome amigável (por exemplo, `MEmu · 127.0.0.1:21503`); com vários dispositivos, a seleção explícita continua obrigatória. O painel mostra inicialização do aplicativo, fase da FSM, ação pendente/confirmada, opções reconhecidas no draft, pontuação e justificativa da escolha, além de duração, `UNKNOWN`, saúde da captura, dataset e recursos. O retrato validado sobrevive a reinícios em `datasets/account_state.json`.
 
 ## Executor experimental de uma batalha
 
-Este comando envia taps reais. Deixe o jogo na HOME ou em uma oferta pós-batalha reconhecida e informe o serial exato:
+Este comando envia taps reais. O MEmu pode estar na tela inicial; o executor abre o jogo pelo pacote Android e aguarda a HOME antes de iniciar:
 
 ```powershell
 .\.venv312\Scripts\python.exe -m src.automation.main --device 127.0.0.1:21503 --confirm-live-input
 ```
 
-Opcionalmente, `--seed 7` torna as escolhas aleatórias reproduzíveis e `--max-minutes 20` limita o tempo total. Sem `--max-minutes`, o matchmaking não recebe timeout artificial; `Ctrl+C` continua disponível.
+Opcionalmente, `--max-minutes 20` limita o tempo total. Sem esse argumento, o matchmaking não recebe timeout artificial; `Ctrl+C` continua disponível. Não existe seed porque não há escolha aleatória.
 
 O executor:
 
 - toca Batalha uma vez e aguarda matchmaking;
 - escolhe somente slots visualmente preenchidos em drafts normais e bônus de recuperação;
+- lê nome/efeito com RapidOCR e pontua quantidade, multiplicador, upgrade válido, continuidade, diversidade e confiança;
+- registra candidatos, notas e justificativa em `actions.jsonl` e mostra a mesma análise na GUI;
 - não toca durante combate ou resultado de round;
 - separa splash, distribuição de maestria, pacote pronto e animação pós-pacote;
 - fecha a oferta paga pós-batalha exclusivamente pelo X detectado;
@@ -99,7 +101,7 @@ O executor:
 - para sem repetir o tap se uma pós-condição não aparecer;
 - grava frames em `datasets/sessions/<sessão>/observations.jsonl` e ações em `actions.jsonl`.
 
-Anúncios, impulsos, compras, upgrades e qualquer gasto permanecem desabilitados. A GUI não importa esse executor e continua incapaz de enviar taps de gameplay.
+Anúncios, impulsos, compras de oferta, upgrades da coleção e qualquer gasto permanecem desabilitados. Na GUI, somente **Executar 1 batalha**, após confirmação, usa o caminho ativo; **Iniciar observação** não envia taps de gameplay.
 
 ## Limitações conhecidas
 
@@ -110,7 +112,7 @@ Anúncios, impulsos, compras, upgrades e qualquer gasto permanecem desabilitados
 - a presença de ofertas/atualização por anúncio e do contador de renovação diária já é observável; recursos da conta, troféus, nível, posição/pontos da Liga e unidades visíveis da Coleção possuem OCR especializado, enquanto temporizadores de ofertas/anúncios continuam `OCR_PENDING`;
 - recompensas especiais e algumas telas fora dos fluxos gravados ainda não possuem cobertura calibrada;
 - capturas reais podem permanecer em `UNKNOWN`, o que é esperado nesta fundação;
-- o executor experimental detecta slots válidos e escolhe aleatoriamente, mas ainda não interpreta estrategicamente nome/efeito de todas as cartas; toda ação ativa possui pós-condição e orçamento, enquanto anúncios, impulsos e gastos continuam bloqueados;
+- o executor reconhece os efeitos já observados (`+N`, `xN`, `UP` e transformação zumbi) e usa uma utilidade determinística; isso é um viés racional inicial, não uma tier list comprovada — pesos de matchup e taxa de vitória ainda precisam ser aprendidos com resultados reais;
 - replay demonstra determinismo e segurança estrutural, mas não substitui a validação controlada de captura ao vivo no MEmu.
 
 ## Próximas etapas fechadas

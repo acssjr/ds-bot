@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import argparse
 import math
-import random
 import sys
 
 from loguru import logger
 
 from src.automation.battle_runner import BattleRunner, BattleSettings
+from src.automation.game_launcher import GameLauncher
 from src.automation.live_input import LiveAdbInput
 from src.capture.adb_source import ADBCaptureSource
 from src.capture.manager import CaptureManager
@@ -47,7 +47,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="required acknowledgement that this command sends real taps",
     )
-    parser.add_argument("--seed", type=int, default=None, help="optional deterministic draft seed")
     parser.add_argument(
         "--max-minutes",
         type=_positive_minutes,
@@ -68,17 +67,19 @@ def main(argv: list[str] | None = None) -> int:
             connection_generation=lambda: session.connection_generation,
         )
         events = LoggingEventSink(logger)
+        cancellation = CancellationToken()
+        GameLauncher(session, events=events).ensure_foreground(cancellation)
         recorder = SessionRecorder()
         runner = BattleRunner(
             capture=capture,
             perception=LegacyVisionAdapter(),
             input_backend=LiveAdbInput(session=session, events=events),
-            cancellation=CancellationToken(),
+            cancellation=cancellation,
             settings=BattleSettings(
                 max_runtime_seconds=(args.max_minutes * 60.0 if args.max_minutes is not None else None)
             ),
             recorder=recorder,
-            rng=random.Random(args.seed),
+            events=events,
         )
         logger.warning(
             "LIVE INPUT ENABLED for one battle on {}; paid offers, ads, boosts and spending remain disabled",

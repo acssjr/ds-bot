@@ -18,6 +18,7 @@ class EventKind(str, Enum):
     CAPTURE = "capture"
     DATASET = "dataset"
     INPUT = "input"
+    AUTOMATION = "automation"
     RECOVERY = "recovery"
     ERROR = "error"
 
@@ -105,6 +106,7 @@ class EventBus:
             EventKind.LIFECYCLE,
             EventKind.ERROR,
             EventKind.INPUT,
+            EventKind.AUTOMATION,
             EventKind.RECOVERY,
         }
 

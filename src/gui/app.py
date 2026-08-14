@@ -9,7 +9,11 @@ from dataclasses import dataclass
 import adbutils
 import customtkinter as ctk
 from loguru import logger
+from tkinter import messagebox
 
+from src.automation.battle_runner import BattleRunner, BattleSettings
+from src.automation.game_launcher import GameLauncher
+from src.automation.live_input import LiveAdbInput
 from src.capture.adb_source import ADBCaptureSource
 from src.capture.manager import CaptureManager
 from src.core.cancellation import CancellationToken
@@ -107,6 +111,7 @@ def run_observer_worker(
                 serial,
                 timeout_seconds=ADB_SOCKET_TIMEOUT_SECONDS,
             )
+            GameLauncher(session, events=events).ensure_foreground(cancellation)
             source = ADBCaptureSource(session)
             capture = CaptureManager(
                 source,
@@ -145,21 +150,83 @@ def run_observer_worker(
         return
 
 
+def run_battle_worker(
+    serial: str,
+    cancellation: CancellationToken,
+    events: EventBus,
+) -> None:
+    """Run one explicitly confirmed battle and stream analysis to the GUI."""
+    try:
+        events.publish(
+            RuntimeEvent(EventKind.LIFECYCLE, time.monotonic(), {"status": "starting"})
+        )
+        session = DeviceSession(serial, timeout_seconds=ADB_SOCKET_TIMEOUT_SECONDS)
+        GameLauncher(session, events=events).ensure_foreground(cancellation)
+        capture = CaptureManager(
+            ADBCaptureSource(session),
+            device_serial=session.serial,
+            connection_generation=lambda: session.connection_generation,
+        )
+        runner = BattleRunner(
+            capture=capture,
+            perception=LegacyVisionAdapter(),
+            input_backend=LiveAdbInput(session=session, events=events),
+            cancellation=cancellation,
+            settings=BattleSettings(),
+            recorder=SessionRecorder(),
+            events=events,
+        )
+        events.publish(
+            RuntimeEvent(EventKind.LIFECYCLE, time.monotonic(), {"status": "running"})
+        )
+        result = runner.run()
+        events.publish(
+            RuntimeEvent(
+                EventKind.AUTOMATION,
+                time.monotonic(),
+                {
+                    "category": "battle",
+                    "status": "finished" if result.completed else "cancelled",
+                    "phase": result.final_phase.value,
+                    "frames": result.frames,
+                    "actions": result.actions,
+                },
+            )
+        )
+        events.publish(
+            RuntimeEvent(EventKind.LIFECYCLE, time.monotonic(), {"status": "stopping"})
+        )
+        events.publish(
+            RuntimeEvent(EventKind.LIFECYCLE, time.monotonic(), {"status": "stopped"})
+        )
+    except Exception as exc:
+        events.publish(
+            RuntimeEvent(
+                EventKind.ERROR,
+                time.monotonic(),
+                {"phase": "battle", "error": repr(exc)},
+            )
+        )
+        events.publish(
+            RuntimeEvent(EventKind.LIFECYCLE, time.monotonic(), {"status": "failed"})
+        )
+
 class DraftShowdownGUI(ctk.CTk):
     """Tk adapter for one explicitly selected observation runtime session."""
 
     def __init__(self) -> None:
         super().__init__()
 
-        self.title("Draft Showdown — Observação segura")
-        self.geometry("980x680")
-        self.minsize(860, 560)
+        self.title("Draft Showdown — Controle supervisionado")
+        self.geometry("1180x760")
+        self.minsize(980, 640)
 
         self._closing = False
         self._close_finalized = False
         self._close_deadline: float | None = None
         self._clock = time.monotonic
         self.is_running = False
+        self._run_mode = "idle"
         self._available_serials: tuple[str, ...] = ()
         self._serial_by_label: dict[str, str] = {}
         self._runtime_events: EventBus | None = None
@@ -229,6 +296,17 @@ class DraftShowdownGUI(ctk.CTk):
         )
         self.btn_start.pack(side="left", padx=5)
 
+        self.btn_battle = ctk.CTkButton(
+            self.header_frame,
+            text="⚔ Executar 1 batalha",
+            fg_color="#6A1B9A",
+            hover_color="#4A148C",
+            width=155,
+            state="disabled",
+            command=self.start_battle,
+        )
+        self.btn_battle.pack(side="left", padx=5)
+
         self.btn_pause = ctk.CTkButton(
             self.header_frame,
             text="Pausa indisponível",
@@ -239,7 +317,7 @@ class DraftShowdownGUI(ctk.CTk):
 
         self.btn_stop = ctk.CTkButton(
             self.header_frame,
-            text="■ Parar observação",
+            text="■ Parar",
             fg_color="#C62828",
             hover_color="#B71C1C",
             width=135,
@@ -299,6 +377,22 @@ class DraftShowdownGUI(ctk.CTk):
             text_color="#FFE082",
         )
         self.lbl_context_state.pack(anchor="w", padx=15, pady=(0, 6))
+        self.lbl_automation_state = ctk.CTkLabel(
+            state_frame,
+            text="Automação: inativa | Segurança: sem gastos, anúncios ou impulsos",
+            text_color="#CE93D8",
+            justify="left",
+            wraplength=1080,
+        )
+        self.lbl_automation_state.pack(anchor="w", padx=15, pady=(0, 6))
+        self.lbl_decision_state = ctk.CTkLabel(
+            state_frame,
+            text="Decisão do draft: aguardando opções reconhecidas",
+            text_color="#80CBC4",
+            justify="left",
+            wraplength=1080,
+        )
+        self.lbl_decision_state.pack(anchor="w", padx=15, pady=(0, 6))
         self.lbl_session_state = ctk.CTkLabel(
             state_frame,
             text="Sessão: - | Observações: 0 | Transições: 0 | UNKNOWN: 0",
@@ -398,6 +492,7 @@ class DraftShowdownGUI(ctk.CTk):
         self.device_option.configure(values=["Buscando dispositivos..."])
         self.device_option.set("Buscando dispositivos...")
         self.btn_start.configure(state="disabled")
+        self.btn_battle.configure(state="disabled")
         self.btn_refresh.configure(state="disabled")
         try:
             worker = self._thread_factory(
@@ -482,9 +577,11 @@ class DraftShowdownGUI(ctk.CTk):
         self._current_screen = None
         self._current_screen_since = None
         self.is_running = True
+        self._run_mode = "observation"
 
         self.status_badge.configure(text="🟠 INICIANDO", fg_color="#E65100")
         self.btn_start.configure(state="disabled")
+        self.btn_battle.configure(state="disabled")
         self.btn_pause.configure(state="disabled")
         self.btn_stop.configure(state="normal")
         self.btn_refresh.configure(state="disabled")
@@ -504,9 +601,80 @@ class DraftShowdownGUI(ctk.CTk):
             self._cancellation = None
             self._runtime_events = None
             self.is_running = False
+            self._run_mode = "idle"
             self.status_badge.configure(text="🔴 FALHA", fg_color="#A91B0D")
             self.btn_stop.configure(state="disabled")
             logger.error("Não foi possível iniciar o worker: {!r}", exc)
+            self._update_controls()
+
+    def start_battle(self) -> None:
+        if self._closing or self.is_running or self._bot_thread is not None:
+            return
+        selected_device = self.device_option.get().strip()
+        serial = self._serial_by_label.get(selected_device, selected_device)
+        if serial not in self._available_serials:
+            logger.error("Selecione um dispositivo ADB disponível.")
+            return
+        confirmed = messagebox.askyesno(
+            "Executar uma batalha",
+            (
+                "O bot abrirá o Draft Showdown se necessário e enviará taps reais "
+                "durante exatamente uma batalha. Compras, anúncios, impulsos e gastos "
+                "continuam bloqueados. Deseja continuar?"
+            ),
+            parent=self,
+        )
+        if not confirmed:
+            return
+
+        cancellation = CancellationToken()
+        events = EventBus(capacity=512)
+        self._cancellation = cancellation
+        self._runtime_events = events
+        self._last_lifecycle_key = None
+        self._last_lifecycle_status = None
+        self._last_error_text = None
+        self._reported_dropped_events = 0
+        self._dataset_saved_count = 0
+        self._dataset_session_directory = "-"
+        self._session_started_at = self._clock()
+        self._observations_total = 0
+        self._unknown_total = 0
+        self._screen_transitions = 0
+        self._current_screen = None
+        self._current_screen_since = None
+        self.is_running = True
+        self._run_mode = "battle"
+        self.status_badge.configure(text="🟠 PREPARANDO", fg_color="#E65100")
+        self.lbl_automation_state.configure(
+            text="Automação: conectando ao MEmu e verificando o jogo | Taps ainda não enviados"
+        )
+        self.lbl_decision_state.configure(
+            text="Decisão do draft: política determinística aguardando cartas"
+        )
+        self.btn_start.configure(state="disabled")
+        self.btn_battle.configure(state="disabled")
+        self.btn_pause.configure(state="disabled")
+        self.btn_stop.configure(state="normal")
+        self.btn_refresh.configure(state="disabled")
+        try:
+            worker = self._thread_factory(
+                target=run_battle_worker,
+                args=(serial, cancellation, events),
+                daemon=True,
+                name="draft-showdown-one-battle",
+            )
+            self._bot_thread = worker
+            worker.start()
+        except Exception as exc:
+            cancellation.cancel()
+            self._bot_thread = None
+            self._cancellation = None
+            self._runtime_events = None
+            self.is_running = False
+            self._run_mode = "idle"
+            self.status_badge.configure(text="🔴 FALHA", fg_color="#A91B0D")
+            logger.error("Não foi possível iniciar o executor: {!r}", exc)
             self._update_controls()
 
     def stop_bot(self) -> None:
@@ -517,7 +685,7 @@ class DraftShowdownGUI(ctk.CTk):
         self.btn_start.configure(state="disabled")
         self.btn_pause.configure(state="disabled")
         self.btn_stop.configure(state="disabled")
-        logger.info("Parada cooperativa solicitada.")
+        logger.info("Parada cooperativa solicitada para o modo {}.", self._run_mode)
 
     def _process_runtime_events(self) -> None:
         if self._closing:
@@ -598,6 +766,10 @@ class DraftShowdownGUI(ctk.CTk):
             self.lbl_context_state.configure(
                 text=f"Recuperação de anúncio: {status} via {method} | {package}"
             )
+            return
+
+        if event.kind is EventKind.AUTOMATION:
+            self._apply_automation_event(event)
             return
 
         if event.kind is EventKind.DATASET:
@@ -723,7 +895,17 @@ class DraftShowdownGUI(ctk.CTk):
 
     def _update_context_details(self, event: RuntimeEvent) -> None:
         context = event.payload.get("context")
-        if context == "daily_offers":
+        if context == "draft":
+            choices = event.payload.get("draft_choices", ())
+            descriptions = []
+            for choice in choices if isinstance(choices, (tuple, list)) else ():
+                if hasattr(choice, "get"):
+                    descriptions.append(
+                        f"S{int(choice.get('slot', 0)) + 1}: {choice.get('text', 'não lido')}"
+                    )
+            variant = event.payload.get("draft_variant", "normal_pick")
+            text = f"Draft ({variant}): " + (" | ".join(descriptions) or "OCR aguardando estabilidade")
+        elif context == "daily_offers":
             free_ads = int(event.payload.get("free_ad_offers_visible", 0))
             refresh_ad = "sim" if event.payload.get("daily_refresh_ad_visible") else "não visível"
             reward_status = (
@@ -759,6 +941,67 @@ class DraftShowdownGUI(ctk.CTk):
             text = f"Contexto: {event.payload.get('screen', 'UNKNOWN')}"
         self.lbl_context_state.configure(text=text)
 
+    def _apply_automation_event(self, event: RuntimeEvent) -> None:
+        status = str(event.payload.get("status") or "-")
+        category = str(event.payload.get("category") or "-")
+        if category == "app":
+            if status == "connecting":
+                text = "Aplicativo: conectando ao dispositivo ADB"
+            elif status == "launching":
+                text = (
+                    "Aplicativo: abrindo Draft Showdown a partir de "
+                    f"{event.payload.get('previous_package', 'launcher')}"
+                )
+            elif status == "ready":
+                origin = "aberto pelo bot" if event.payload.get("started") else "já estava aberto"
+                text = f"Aplicativo: Draft Showdown em primeiro plano ({origin})"
+            else:
+                text = f"Aplicativo: {status}"
+            self.lbl_automation_state.configure(text=text)
+            logger.info(text)
+            return
+
+        phase = str(event.payload.get("phase") or "-")
+        if status == "phase_changed":
+            text = f"Automação: analisando fase {phase} | aguardando estabilidade visual"
+        elif status == "action_issued":
+            action = str(event.payload.get("action") or "-")
+            text = f"Automação: tap {action} enviado em {phase} | validando pós-condição"
+            metadata = event.payload.get("metadata")
+            decision = metadata.get("decision") if hasattr(metadata, "get") else None
+            if hasattr(decision, "get"):
+                candidates = decision.get("candidates", ())
+                scores = []
+                for candidate in candidates if isinstance(candidates, (tuple, list)) else ():
+                    if hasattr(candidate, "get"):
+                        scores.append(
+                            f"S{int(candidate.get('slot', 0)) + 1} "
+                            f"{candidate.get('text', '?')}={float(candidate.get('score', 0.0)):.1f}"
+                        )
+                self.lbl_decision_state.configure(
+                    text=(
+                        f"Draft: escolheu S{int(decision.get('selected_slot', 0)) + 1} "
+                        f"{decision.get('selected_text', '?')} ({float(decision.get('selected_score', 0.0)):.1f}) | "
+                        + " | ".join(scores)
+                    )
+                )
+                logger.info("Análise do draft: {}", decision.get("reason", "-"))
+        elif status == "action_resolved":
+            text = f"Automação: ação {event.payload.get('action', '-')} confirmada visualmente → {phase}"
+        elif status == "action_timeout":
+            text = f"Automação: pós-condição não confirmada; execução interrompida em {phase}"
+        elif status in {"completed", "finished"}:
+            text = (
+                f"Automação: batalha concluída | fase {phase} | "
+                f"{event.payload.get('actions', '-')} ações / {event.payload.get('frames', '-')} frames"
+            )
+        elif status == "cancelled":
+            text = f"Automação: cancelada com segurança em {phase}"
+        else:
+            text = f"Automação: {status} | fase {phase}"
+        self.lbl_automation_state.configure(text=text)
+        logger.info(text)
+
     def _reap_worker(self, events: EventBus | None) -> None:
         worker = self._bot_thread
         if worker is None or worker.is_alive():
@@ -789,6 +1032,7 @@ class DraftShowdownGUI(ctk.CTk):
 
         self._bot_thread = None
         self._cancellation = None
+        self._run_mode = "idle"
         if self._runtime_events is events:
             self._runtime_events = None
         self._update_controls()
@@ -803,6 +1047,7 @@ class DraftShowdownGUI(ctk.CTk):
             ) in self._available_serials
         )
         self.btn_start.configure(state="normal" if can_start else "disabled")
+        self.btn_battle.configure(state="normal" if can_start else "disabled")
         self.btn_pause.configure(state="disabled")
         if not self.is_running:
             self.btn_stop.configure(state="disabled")
@@ -851,6 +1096,7 @@ class DraftShowdownGUI(ctk.CTk):
         self._closing = True
         self.status_badge.configure(text="🟠 ENCERRANDO", fg_color="#E65100")
         self.btn_start.configure(state="disabled")
+        self.btn_battle.configure(state="disabled")
         self.btn_pause.configure(state="disabled")
         self.btn_stop.configure(state="disabled")
         self.btn_refresh.configure(state="disabled")

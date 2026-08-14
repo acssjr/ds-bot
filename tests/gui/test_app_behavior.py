@@ -129,6 +129,7 @@ def make_headless_gui(
     gui = DraftShowdownGUI.__new__(DraftShowdownGUI)
     gui._closing = False
     gui.is_running = True
+    gui._run_mode = "observation"
     gui._available_serials = ("emulator-1",)
     gui._serial_by_label = {"emulator-1": "emulator-1"}
     gui._runtime_events = events
@@ -155,11 +156,14 @@ def make_headless_gui(
     gui.device_option = FakeWidget("device", value="emulator-1", timeline=timeline)
     gui.status_badge = FakeWidget("status", timeline=timeline)
     gui.btn_start = FakeWidget("start", timeline=timeline)
+    gui.btn_battle = FakeWidget("battle", timeline=timeline)
     gui.btn_pause = FakeWidget("pause", timeline=timeline)
     gui.btn_stop = FakeWidget("stop", timeline=timeline)
     gui.btn_refresh = FakeWidget("refresh", timeline=timeline)
     gui.lbl_current_state = FakeWidget("observation", timeline=timeline)
     gui.lbl_context_state = FakeWidget("context", timeline=timeline)
+    gui.lbl_automation_state = FakeWidget("automation", timeline=timeline)
+    gui.lbl_decision_state = FakeWidget("decision", timeline=timeline)
     gui.lbl_session_state = FakeWidget("session", timeline=timeline)
     gui.lbl_capture_state = FakeWidget("capture", timeline=timeline)
     gui.lbl_dataset_state = FakeWidget("dataset", timeline=timeline)
