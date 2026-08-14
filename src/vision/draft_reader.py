@@ -8,6 +8,8 @@ from typing import Any
 
 import numpy as np
 
+from src.vision.ocr_engine import shared_rapidocr
+
 
 _KNOWN_UNITS = (
     "Cavaleiro",
@@ -56,9 +58,7 @@ class DraftCardReader:
 
     @staticmethod
     def _default_engine_factory() -> Any:
-        from rapidocr import RapidOCR
-
-        return RapidOCR()
+        return shared_rapidocr()
 
     @property
     def _ocr(self) -> Any:

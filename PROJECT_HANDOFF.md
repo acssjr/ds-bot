@@ -184,7 +184,7 @@ Quando continuar o desenvolvimento no ChatGPT, sugere-se seguir a seguinte ordem
 
 ## 8. ATUALIZAÇÃO VALIDADA — 13/08/2026
 
-Esta seção substitui afirmações antigas deste documento quando houver conflito. A CLI principal continua **observe-first**. A GUI agora separa observação de um executor supervisionado de exatamente uma batalha; o caminho ativo exige confirmação humana e mantém gastos, anúncios e impulsos bloqueados.
+Esta seção substitui afirmações antigas deste documento quando houver conflito. A CLI principal continua **observe-first**. A GUI separa observação de um executor supervisionado de exatamente uma batalha. O caminho ativo exige confirmação humana; anúncios recompensados e impulsos com moeda M estão habilitados, enquanto reais, gemas, moedas, ofertas pagas e upgrades da coleção permanecem bloqueados.
 
 ### Estado atual validado
 
@@ -246,7 +246,9 @@ Execução explícita:
 .\.venv312\Scripts\python.exe -m src.automation.main --device 127.0.0.1:21503 --confirm-live-input
 ```
 
-Antes do próximo teste ao vivo, executar a suíte. O MEmu pode estar no launcher: o bot abre o jogo e espera a HOME. O próximo incremento de estratégia é correlacionar escolhas, adversário e vitória/derrota para calibrar os pesos; anúncios, impulsos e qualquer gasto continuam fora do executor.
+O pós-batalha reconhece por OCR `REIV.`, cooldown, `x2 BITS`, `IMPULSO`, `TOQUE PARA PULAR` e `NOVA UNIDADE`. Anúncios ficam passivos até a confirmação visual, suportam sequência dupla e usam o supervisor para retornar de Play Store/navegador. Impulsos são limitados a uma tentativa por slot habilitado e respeitam moeda M conhecida igual a zero.
+
+Antes do próximo teste ao vivo, executar a suíte. O MEmu pode estar no launcher: o bot abre o jogo e espera a HOME. O próximo incremento de estratégia é correlacionar escolhas, adversário e vitória/derrota para calibrar os pesos.
 
 ---
 

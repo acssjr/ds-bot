@@ -26,6 +26,8 @@ class ContextAnalyzer:
         self._daily_refresh_label = self._load(indicators / "daily_refresh_label.png")
         self._daily_refresh_button = self._load(indicators / "daily_refresh_ad_button.png")
         self._recovery_banner = self._load(templates / "automation" / "recovery_banner_verified.png")
+        self._ad_endcard_close = self._load(templates / "ads" / "endcard_close_verified.png")
+        self._ad_reward_granted = self._load(templates / "ads" / "reward_granted_verified.png")
         self._draft_reader = draft_reader or DraftCardReader()
 
     @staticmethod
@@ -40,6 +42,17 @@ class ContextAnalyzer:
             return 0.0
         result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
         return float(cv2.minMaxLoc(result)[1])
+
+    @staticmethod
+    def _best_match(
+        frame: np.ndarray,
+        template: np.ndarray | None,
+    ) -> tuple[float, tuple[int, int]] | None:
+        if template is None or template.shape[0] > frame.shape[0] or template.shape[1] > frame.shape[1]:
+            return None
+        result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
+        _minimum, score, _minimum_location, location = cv2.minMaxLoc(result)
+        return float(score), (int(location[0]), int(location[1]))
 
     @staticmethod
     def _count_matches(frame: np.ndarray, template: np.ndarray | None, threshold: float) -> int:
@@ -79,6 +92,23 @@ class ContextAnalyzer:
             }
         if screen is ScreenState.VICTORY_SUMMARY:
             return self._victory_context(frame, sub_element)
+        if screen is ScreenState.DOUBLE_BITS:
+            return {
+                "context": "double_bits",
+                "double_bits_ad_available": True,
+                "continue_visible": True,
+            }
+        if screen is ScreenState.MASTERY_BOOST:
+            return {
+                "context": "mastery_boost",
+                "boost_available_slots": self._boost_available_slots(frame),
+                "continue_visible": True,
+                "spending_currency": "mastery_currency",
+            }
+        if screen is ScreenState.BIT_PACK_OPENING:
+            return {"context": "bit_pack", "tap_to_skip_visible": True}
+        if screen is ScreenState.NEW_UNIT_UNLOCKED:
+            return {"context": "new_unit", "continue_visible": True}
         if screen is ScreenState.POST_BATTLE_OFFER:
             close = self._post_battle_offer_close(frame)
             payload: dict[str, Any] = {
@@ -118,12 +148,18 @@ class ContextAnalyzer:
                 "completion_signal": sub_element or "unconfirmed",
             }
         if screen is ScreenState.AD_REWARD_GRANTED:
-            return {
+            payload: dict[str, Any] = {
                 "context": "rewarded_ad",
                 "ad_status": "reward_granted",
                 "safe_to_close": True,
                 "completion_signal": sub_element or "visual_confirmation",
             }
+            close = self._ad_close_point(frame, sub_element)
+            payload["ad_close_visible"] = close is not None
+            if close is not None:
+                height, width = frame.shape[:2]
+                payload["ad_close_point"] = (close[0] / width, close[1] / height)
+            return payload
         if screen is ScreenState.LEAGUE_MENU:
             return {"context": "league", "league": "BRONZE", "trophies_text": "OCR_PENDING"}
         if screen is ScreenState.RANKED_LOCKED:
@@ -155,6 +191,21 @@ class ContextAnalyzer:
     @staticmethod
     def _victory_context(frame: np.ndarray, sub_element: str | None) -> dict[str, Any]:
         height, width = frame.shape[:2]
+        if sub_element == "ocr:victory_reward_available":
+            return {
+                "context": "victory",
+                "victory_phase": "package_ready",
+                "continue_visible": True,
+                "reward_ad_available": True,
+            }
+        if sub_element == "ocr:victory_reward_cooldown":
+            return {
+                "context": "victory",
+                "victory_phase": "package_ready",
+                "continue_visible": True,
+                "reward_ad_available": False,
+                "reward_ad_cooldown": True,
+            }
         if sub_element == "victory_package":
             button = frame[
                 round(height * 0.85) : round(height * 0.97),
@@ -167,6 +218,7 @@ class ContextAnalyzer:
                 "context": "victory",
                 "victory_phase": "package_ready" if ready else "package_animating",
                 "continue_visible": ready,
+                "reward_ad_available": False,
             }
 
         cards = frame[
@@ -185,3 +237,38 @@ class ContextAnalyzer:
     @staticmethod
     def _post_battle_offer_close(frame: np.ndarray) -> tuple[int, int] | None:
         return ScreenClassifier._post_battle_offer_close(frame)
+
+    @staticmethod
+    def _boost_available_slots(frame: np.ndarray) -> tuple[int, ...]:
+        height, width = frame.shape[:2]
+        slots: list[int] = []
+        for index in range(4):
+            left = round(width * (0.01 + index * 0.245))
+            right = round(width * (0.25 + index * 0.245))
+            button = frame[round(height * 0.56) : round(height * 0.68), left:right]
+            if button.size == 0:
+                continue
+            hsv = cv2.cvtColor(button, cv2.COLOR_BGR2HSV)
+            green = cv2.inRange(hsv, np.array([35, 60, 70]), np.array([95, 255, 255]))
+            if float(np.mean(green > 0)) >= 0.08:
+                slots.append(index)
+        return tuple(slots)
+
+    def _ad_close_point(
+        self,
+        frame: np.ndarray,
+        sub_element: str | None,
+    ) -> tuple[int, int] | None:
+        template = (
+            self._ad_reward_granted
+            if sub_element == "ad_reward_granted"
+            else self._ad_endcard_close
+        )
+        matched = self._best_match(frame, template)
+        threshold = 0.78 if sub_element == "ad_reward_granted" else 0.82
+        if matched is None or matched[0] < threshold or template is None:
+            return None
+        x, y = matched[1]
+        if sub_element == "ad_reward_granted":
+            return x + round(template.shape[1] * 0.16), y + template.shape[0] // 2
+        return x + template.shape[1] // 2, y + template.shape[0] // 2

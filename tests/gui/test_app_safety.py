@@ -132,7 +132,10 @@ def test_gui_copy_separates_observation_from_one_battle_automation() -> None:
 
     assert "Iniciar observação" in source
     assert "Executar 1 batalha" in source
-    assert "Compras, anúncios, impulsos e gastos" in source
+    assert "Anúncios recompensados" in source
+    assert "moeda M" in source
+    assert "Compras " in source
+    assert "em reais, gemas e moedas continuam bloqueadas" in source
     assert "Iniciar Bot" not in source
     assert "RODANDO" not in source
     assert "Configurações & Ads" not in source

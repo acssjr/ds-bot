@@ -94,6 +94,10 @@ O executor:
 - escolhe somente slots visualmente preenchidos em drafts normais e bônus de recuperação;
 - lê nome/efeito com RapidOCR e pontua quantidade, multiplicador, upgrade válido, continuidade, diversidade e confiança;
 - registra candidatos, notas e justificativa em `actions.jsonl` e mostra a mesma análise na GUI;
+- reivindica o pacote de vitória e `x2 BITS` quando o anúncio recompensado está disponível;
+- aguarda contador/barra e só fecha o anúncio após `safe_to_close=true`, inclusive em sequências de dois anúncios;
+- aplica no máximo um impulso de maestria por slot visualmente habilitado e para quando a moeda M conhecida chega a zero;
+- pula Bit Pack, confirma nova unidade e recupera Play Store/navegador para o jogo;
 - não toca durante combate ou resultado de round;
 - separa splash, distribuição de maestria, pacote pronto e animação pós-pacote;
 - fecha a oferta paga pós-batalha exclusivamente pelo X detectado;
@@ -101,7 +105,7 @@ O executor:
 - para sem repetir o tap se uma pós-condição não aparecer;
 - grava frames em `datasets/sessions/<sessão>/observations.jsonl` e ações em `actions.jsonl`.
 
-Anúncios, impulsos, compras de oferta, upgrades da coleção e qualquer gasto permanecem desabilitados. Na GUI, somente **Executar 1 batalha**, após confirmação, usa o caminho ativo; **Iniciar observação** não envia taps de gameplay.
+Anúncios recompensados e impulsos que consomem moeda M estão habilitados na batalha confirmada. Compras em reais, gemas ou moedas, ofertas pagas e upgrades da coleção permanecem bloqueados. **Iniciar observação** não envia taps de gameplay.
 
 ## Limitações conhecidas
 
@@ -124,6 +128,6 @@ A automação ativa só poderá ser habilitada depois de gates separados e verif
 3. FSM e política de intenção que rejeitem `UNKNOWN` e baixa confiança;
 4. action gate e backend de entrada isolado, validados em dry-run e disponíveis no entrypoint experimental;
 5. confirmação por frame novo de cada pós-condição, implementada sem repetição cega;
-6. ampliar o supervisor já limitado a anúncios com pós-condições específicas para futuras ações de gameplay.
+6. calibrar custos/benefícios dos impulsos e recompensas com resultados reais, mantendo orçamento explícito.
 
 Consulte a [arquitetura aprovada](docs/superpowers/specs/2026-08-13-draft-showdown-bot-architecture-design.md) e o [plano desta fundação](docs/superpowers/plans/2026-08-13-draft-showdown-safe-foundation.md) para os contratos completos.

@@ -15,6 +15,7 @@ from src.core.cancellation import CancellationToken
 from src.core.events import LoggingEventSink
 from src.device.session import DeviceSession
 from src.recording.session_recorder import SessionRecorder
+from src.recovery.app_supervisor import RewardedAdAppSupervisor
 from src.utils.logging_config import setup_logger
 from src.vision.legacy_adapter import LegacyVisionAdapter
 
@@ -80,9 +81,10 @@ def main(argv: list[str] | None = None) -> int:
             ),
             recorder=recorder,
             events=events,
+            recovery=RewardedAdAppSupervisor(session),
         )
         logger.warning(
-            "LIVE INPUT ENABLED for one battle on {}; paid offers, ads, boosts and spending remain disabled",
+            "LIVE INPUT ENABLED for one battle on {}; rewarded ads and bounded mastery boosts enabled; real-money, gem and coin purchases disabled",
             session.serial,
         )
         result = runner.run()

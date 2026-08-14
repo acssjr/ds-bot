@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from src.automation.battle_runner import (
+    ActionName,
     ActionPostconditionTimeout,
     BattlePhase,
     BattleRunner,
@@ -160,8 +161,59 @@ def test_passive_states_never_issue_actions() -> None:
         BattlePhase.ROUND_RESULT,
         BattlePhase.VICTORY_PACKAGE_ANIMATING,
         BattlePhase.UNKNOWN,
+        BattlePhase.WATCHING_AD,
     ):
         assert BattleRunner.__new__(BattleRunner)._intent(phase, {}) is None
+
+
+def test_post_battle_rewards_boosts_and_ads_are_bounded_and_explicit() -> None:
+    runner = BattleRunner.__new__(BattleRunner)
+    runner._victory_reward_claimed = False
+    runner._double_bits_claimed = False
+    runner._boost_attempted_slots = set()
+    runner._bit_pack_tapped = False
+
+    victory = runner._intent(
+        BattlePhase.VICTORY_PACKAGE_READY,
+        {"reward_ad_available": True, "continue_visible": True},
+    )
+    assert victory is not None and victory.name is ActionName.CLAIM_VICTORY_AD
+
+    assert runner._intent(BattlePhase.WATCHING_AD, {"safe_to_close": False}) is None
+    close = runner._intent(
+        BattlePhase.AD_REWARD_GRANTED,
+        {"safe_to_close": True, "ad_close_point": (0.94, 0.04)},
+    )
+    assert close is not None and close.name is ActionName.CLOSE_REWARDED_AD
+
+    double = runner._intent(
+        BattlePhase.DOUBLE_BITS,
+        {"double_bits_ad_available": True},
+    )
+    assert double is not None and double.name is ActionName.CLAIM_DOUBLE_BITS_AD
+    runner._double_bits_claimed = True
+    continued = runner._intent(BattlePhase.DOUBLE_BITS, {})
+    assert continued is not None and continued.name is ActionName.CONTINUE_DOUBLE_BITS
+
+    boost = runner._intent(
+        BattlePhase.MASTERY_BOOST,
+        {"boost_available_slots": (0, 1, 2, 3), "resources": {"mastery_currency": 15}},
+    )
+    assert boost is not None and boost.name is ActionName.APPLY_MASTERY_BOOST
+    assert boost.metadata["boost_slot"] == 0
+    runner._boost_attempted_slots = {0, 1, 2, 3}
+    finish_boost = runner._intent(BattlePhase.MASTERY_BOOST, {"boost_available_slots": (0, 1, 2, 3)})
+    assert finish_boost is not None and finish_boost.name is ActionName.CONTINUE_MASTERY
+
+
+def test_mastery_boost_does_not_spend_when_known_currency_is_empty() -> None:
+    runner = BattleRunner.__new__(BattleRunner)
+    runner._boost_attempted_slots = set()
+    intent = runner._intent(
+        BattlePhase.MASTERY_BOOST,
+        {"boost_available_slots": (0, 1), "resources": {"mastery_currency": 0}},
+    )
+    assert intent is not None and intent.name is ActionName.CONTINUE_MASTERY
 
 
 def test_missing_postcondition_stops_without_repeating_tap() -> None:

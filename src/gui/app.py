@@ -175,6 +175,7 @@ def run_battle_worker(
             settings=BattleSettings(),
             recorder=SessionRecorder(),
             events=events,
+            recovery=RewardedAdAppSupervisor(session),
         )
         events.publish(
             RuntimeEvent(EventKind.LIFECYCLE, time.monotonic(), {"status": "running"})
@@ -379,7 +380,7 @@ class DraftShowdownGUI(ctk.CTk):
         self.lbl_context_state.pack(anchor="w", padx=15, pady=(0, 6))
         self.lbl_automation_state = ctk.CTkLabel(
             state_frame,
-            text="Automação: inativa | Segurança: sem gastos, anúncios ou impulsos",
+            text="Automação: inativa | Ads recompensados e impulsos M habilitados na batalha",
             text_color="#CE93D8",
             justify="left",
             wraplength=1080,
@@ -463,8 +464,8 @@ class DraftShowdownGUI(ctk.CTk):
             panel,
             text=(
                 "Os valores são lidos de regiões específicas da imagem e o último valor "
-                "confiável é preservado durante batalha e transições. Automação de gastos, "
-                "impulsos e upgrades continua bloqueada até haver política e pós-condição."
+                "confiável é preservado durante batalha e transições. Impulsos M são limitados "
+                "por slot; compras em reais, gemas/moedas e upgrades continuam bloqueados."
             ),
             justify="left",
             wraplength=900,
@@ -619,8 +620,9 @@ class DraftShowdownGUI(ctk.CTk):
             "Executar uma batalha",
             (
                 "O bot abrirá o Draft Showdown se necessário e enviará taps reais "
-                "durante exatamente uma batalha. Compras, anúncios, impulsos e gastos "
-                "continuam bloqueados. Deseja continuar?"
+                "durante exatamente uma batalha. Anúncios recompensados e até um impulso "
+                "por unidade visível estão habilitados e podem consumir moeda M. Compras "
+                "em reais, gemas e moedas continuam bloqueadas. Deseja continuar?"
             ),
             parent=self,
         )
@@ -931,6 +933,18 @@ class DraftShowdownGUI(ctk.CTk):
                 if safe
                 else "Anúncio recompensado: aguardando timer/barra | Fechamento seguro: NÃO"
             )
+        elif context == "double_bits":
+            text = "Pós-batalha: x2 BITS por anúncio disponível | recompensa será reivindicada"
+        elif context == "mastery_boost":
+            slots = event.payload.get("boost_available_slots", ())
+            text = (
+                "Impulsos de maestria: slots visualmente disponíveis "
+                f"{tuple(int(slot) + 1 for slot in slots)} | máximo de uma tentativa por slot"
+            )
+        elif context == "bit_pack":
+            text = "Bit Pack: animação pronta para pular e revelar conteúdo"
+        elif context == "new_unit":
+            text = "Nova unidade: desbloqueio detectado | aguardando confirmação"
         elif context == "league":
             text = "Liga: BRONZE | Troféus/ranking visíveis; leitura numérica ainda pendente"
         elif context == "ranked":
@@ -968,6 +982,15 @@ class DraftShowdownGUI(ctk.CTk):
             action = str(event.payload.get("action") or "-")
             text = f"Automação: tap {action} enviado em {phase} | validando pós-condição"
             metadata = event.payload.get("metadata")
+            if action == "apply_mastery_boost" and hasattr(metadata, "get"):
+                text = (
+                    f"Impulso M: tentativa no slot {int(metadata.get('boost_slot', 0)) + 1} "
+                    "| aguardando confirmação visual do gasto/efeito"
+                )
+            elif action in {"claim_victory_ad", "claim_double_bits_ad"}:
+                text = "Anúncio: reivindicando recompensa | aguardando carregamento do provedor"
+            elif action == "close_rewarded_ad":
+                text = "Anúncio: recompensa confirmada | fechando pelo X verificado"
             decision = metadata.get("decision") if hasattr(metadata, "get") else None
             if hasattr(decision, "get"):
                 candidates = decision.get("candidates", ())

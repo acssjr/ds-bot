@@ -13,6 +13,7 @@ import numpy as np
 from loguru import logger
 
 from src.state.game_state import ScreenState
+from src.vision.ocr_engine import shared_rapidocr
 
 
 _MENU_SCREENS = {
@@ -112,9 +113,7 @@ class ResourceReader:
 
     @staticmethod
     def _default_engine_factory() -> Any:
-        from rapidocr import RapidOCR
-
-        return RapidOCR()
+        return shared_rapidocr()
 
     @property
     def _ocr(self) -> Any:

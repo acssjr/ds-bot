@@ -7,6 +7,7 @@ from src.vision.context_analyzer import ContextAnalyzer
 from src.core.cancellation import CancellationToken
 from src.state.game_state import ScreenState
 from src.vision.resource_reader import ResourceReader
+from src.vision.flow_screen_reader import FlowScreenReader
 
 class VisionPipeline:
     """Orquestra a análise visual do frame combinando classificação de tela e sub-detectores."""
@@ -16,9 +17,11 @@ class VisionPipeline:
         templates_dir: str = "assets/templates",
         *,
         resource_reader: ResourceReader | None = None,
+        flow_reader: FlowScreenReader | None = None,
     ):
         self.screen_classifier = ScreenClassifier(templates_dir=templates_dir)
         self.context_analyzer = ContextAnalyzer(templates_dir)
+        self.flow_reader = flow_reader or FlowScreenReader()
         self._last_screen = ScreenState.UNKNOWN
         self._last_confidence = 0.0
         self._unknown_streak = 0
@@ -53,6 +56,20 @@ class VisionPipeline:
             screen_state, confidence, sub_element = self.screen_classifier.classify(frame, cancellation=cancellation)
         if cancellation is not None:
             cancellation.raise_if_cancelled()
+
+        needs_flow_text = (
+            screen_state is ScreenState.UNKNOWN and sub_element != "blank_frame"
+        ) or (
+            screen_state is ScreenState.VICTORY_SUMMARY
+            and sub_element == "victory_package"
+        )
+        flow_reader = getattr(self, "flow_reader", None)
+        if needs_flow_text and flow_reader is not None:
+            fallback_screen, fallback_confidence, fallback_element = flow_reader.classify(frame)
+            if fallback_screen is not ScreenState.UNKNOWN:
+                screen_state = fallback_screen
+                confidence = max(confidence, fallback_confidence)
+                sub_element = fallback_element
 
         if (
             screen_state is ScreenState.UNKNOWN

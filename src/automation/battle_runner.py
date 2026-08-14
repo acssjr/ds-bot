@@ -34,6 +34,12 @@ class BattlePhase(str, Enum):
     MASTERY_DISTRIBUTION = "MASTERY_DISTRIBUTION"
     VICTORY_PACKAGE_READY = "VICTORY_PACKAGE_READY"
     VICTORY_PACKAGE_ANIMATING = "VICTORY_PACKAGE_ANIMATING"
+    DOUBLE_BITS = "DOUBLE_BITS"
+    MASTERY_BOOST = "MASTERY_BOOST"
+    BIT_PACK_OPENING = "BIT_PACK_OPENING"
+    NEW_UNIT_UNLOCKED = "NEW_UNIT_UNLOCKED"
+    WATCHING_AD = "WATCHING_AD"
+    AD_REWARD_GRANTED = "AD_REWARD_GRANTED"
     POST_BATTLE_OFFER = "POST_BATTLE_OFFER"
     LEAGUE_MENU = "LEAGUE_MENU"
     UNKNOWN = "UNKNOWN"
@@ -45,6 +51,14 @@ class ActionName(str, Enum):
     SKIP_VICTORY = "skip_victory"
     SKIP_MASTERY = "skip_mastery"
     CONTINUE_VICTORY = "continue_victory"
+    CLAIM_VICTORY_AD = "claim_victory_ad"
+    CLAIM_DOUBLE_BITS_AD = "claim_double_bits_ad"
+    CONTINUE_DOUBLE_BITS = "continue_double_bits"
+    APPLY_MASTERY_BOOST = "apply_mastery_boost"
+    CONTINUE_MASTERY = "continue_mastery"
+    SKIP_BIT_PACK = "skip_bit_pack"
+    CONTINUE_NEW_UNIT = "continue_new_unit"
+    CLOSE_REWARDED_AD = "close_rewarded_ad"
     CLOSE_OFFER = "close_offer"
     RETURN_HOME = "return_home"
 
@@ -68,6 +82,10 @@ class ActionRecorder(Protocol):
     def record(self, frame: Frame, observation: Mapping[str, Any]) -> Any: ...
     def record_action(self, payload: Mapping[str, Any]) -> None: ...
     def close(self) -> None: ...
+
+
+class RecoverySupervisor(Protocol):
+    def after_observation(self, observation: Mapping[str, Any]) -> Mapping[str, Any] | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +164,7 @@ class BattleRunner:
         recorder: ActionRecorder | None = None,
         events: EventSink | None = None,
         draft_policy: DraftPolicy | None = None,
+        recovery: RecoverySupervisor | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._capture = capture
@@ -156,7 +175,12 @@ class BattleRunner:
         self._recorder = recorder
         self._events = events
         self._draft_policy = draft_policy or DraftPolicy()
+        self._recovery = recovery
         self._draft_history: dict[str, int] = {}
+        self._victory_reward_claimed = False
+        self._double_bits_claimed = False
+        self._boost_attempted_slots: set[int] = set()
+        self._bit_pack_tapped = False
         self._clock = clock
         self._command_sequence = 0
 
@@ -203,6 +227,18 @@ class BattleRunner:
             return BattlePhase.POST_BATTLE_OFFER
         if screen is ScreenState.LEAGUE_MENU:
             return BattlePhase.LEAGUE_MENU
+        if screen is ScreenState.DOUBLE_BITS:
+            return BattlePhase.DOUBLE_BITS
+        if screen is ScreenState.MASTERY_BOOST:
+            return BattlePhase.MASTERY_BOOST
+        if screen is ScreenState.BIT_PACK_OPENING:
+            return BattlePhase.BIT_PACK_OPENING
+        if screen is ScreenState.NEW_UNIT_UNLOCKED:
+            return BattlePhase.NEW_UNIT_UNLOCKED
+        if screen is ScreenState.WATCHING_AD:
+            return BattlePhase.WATCHING_AD
+        if screen is ScreenState.AD_REWARD_GRANTED:
+            return BattlePhase.AD_REWARD_GRANTED
         if screen is ScreenState.VICTORY_SUMMARY:
             phase = observation.get("victory_phase")
             return {
@@ -309,11 +345,164 @@ class BattleRunner:
                 frozenset({BattlePhase.VICTORY_PACKAGE_READY, BattlePhase.VICTORY_PACKAGE_ANIMATING}),
                 {},
             )
+        if (
+            phase is BattlePhase.VICTORY_PACKAGE_READY
+            and observation.get("reward_ad_available") is True
+            and not self._victory_reward_claimed
+        ):
+            return _Intent(
+                ActionName.CLAIM_VICTORY_AD,
+                (0.50, 0.75),
+                frozenset(
+                    {
+                        BattlePhase.WATCHING_AD,
+                        BattlePhase.AD_REWARD_GRANTED,
+                        BattlePhase.DOUBLE_BITS,
+                    }
+                ),
+                {"set_flag": "victory_reward_claimed", "reward": "victory_package"},
+            )
         if phase is BattlePhase.VICTORY_PACKAGE_READY and observation.get("continue_visible") is True:
             return _Intent(
                 ActionName.CONTINUE_VICTORY,
                 (0.71, 0.91),
-                frozenset({BattlePhase.VICTORY_PACKAGE_ANIMATING, BattlePhase.LEAGUE_MENU, BattlePhase.POST_BATTLE_OFFER, BattlePhase.HOME}),
+                frozenset(
+                    {
+                        BattlePhase.VICTORY_PACKAGE_ANIMATING,
+                        BattlePhase.DOUBLE_BITS,
+                        BattlePhase.MASTERY_BOOST,
+                        BattlePhase.BIT_PACK_OPENING,
+                        BattlePhase.NEW_UNIT_UNLOCKED,
+                        BattlePhase.LEAGUE_MENU,
+                        BattlePhase.POST_BATTLE_OFFER,
+                        BattlePhase.HOME,
+                    }
+                ),
+                {},
+            )
+        if phase is BattlePhase.AD_REWARD_GRANTED and observation.get("safe_to_close") is True:
+            raw = observation.get("ad_close_point")
+            if not isinstance(raw, (tuple, list)) or len(raw) != 2:
+                return None
+            point = (float(raw[0]), float(raw[1]))
+            safe_corner = 0.0 <= point[1] <= 0.18 and (
+                0.0 <= point[0] <= 0.35 or 0.70 <= point[0] <= 1.0
+            )
+            if not safe_corner:
+                return None
+            return _Intent(
+                ActionName.CLOSE_REWARDED_AD,
+                point,
+                frozenset(
+                    {
+                        BattlePhase.WATCHING_AD,
+                        BattlePhase.DOUBLE_BITS,
+                        BattlePhase.MASTERY_BOOST,
+                        BattlePhase.BIT_PACK_OPENING,
+                        BattlePhase.NEW_UNIT_UNLOCKED,
+                        BattlePhase.VICTORY_PACKAGE_READY,
+                        BattlePhase.LEAGUE_MENU,
+                        BattlePhase.HOME,
+                    }
+                ),
+                {"reward_confirmed": True},
+            )
+        if phase is BattlePhase.DOUBLE_BITS:
+            if observation.get("double_bits_ad_available") is True and not self._double_bits_claimed:
+                return _Intent(
+                    ActionName.CLAIM_DOUBLE_BITS_AD,
+                    (0.50, 0.72),
+                    frozenset(
+                        {
+                            BattlePhase.WATCHING_AD,
+                            BattlePhase.AD_REWARD_GRANTED,
+                            BattlePhase.MASTERY_BOOST,
+                            BattlePhase.BIT_PACK_OPENING,
+                            BattlePhase.NEW_UNIT_UNLOCKED,
+                        }
+                    ),
+                    {"set_flag": "double_bits_claimed", "reward": "double_bits"},
+                )
+            return _Intent(
+                ActionName.CONTINUE_DOUBLE_BITS,
+                (0.50, 0.84),
+                frozenset(
+                    {
+                        BattlePhase.MASTERY_BOOST,
+                        BattlePhase.BIT_PACK_OPENING,
+                        BattlePhase.NEW_UNIT_UNLOCKED,
+                        BattlePhase.LEAGUE_MENU,
+                        BattlePhase.HOME,
+                    }
+                ),
+                {},
+            )
+        if phase is BattlePhase.MASTERY_BOOST:
+            raw_slots = observation.get("boost_available_slots", ())
+            slots = tuple(slot for slot in raw_slots if type(slot) is int and 0 <= slot <= 3)
+            resources = observation.get("resources")
+            raw_currency = resources.get("mastery_currency") if isinstance(resources, Mapping) else None
+            currency_available = not isinstance(raw_currency, int) or raw_currency > 0
+            remaining = tuple(
+                slot for slot in slots if slot not in self._boost_attempted_slots
+            )
+            if remaining and currency_available:
+                slot = remaining[0]
+                return _Intent(
+                    ActionName.APPLY_MASTERY_BOOST,
+                    (0.125 + slot * 0.25, 0.615),
+                    frozenset(
+                        {
+                            BattlePhase.MASTERY_BOOST,
+                            BattlePhase.BIT_PACK_OPENING,
+                            BattlePhase.NEW_UNIT_UNLOCKED,
+                        }
+                    ),
+                    {
+                        "boost_slot": slot,
+                        "spending_currency": "mastery_currency",
+                        "bounded_once_per_slot": True,
+                    },
+                )
+            return _Intent(
+                ActionName.CONTINUE_MASTERY,
+                (0.50, 0.84),
+                frozenset(
+                    {
+                        BattlePhase.BIT_PACK_OPENING,
+                        BattlePhase.NEW_UNIT_UNLOCKED,
+                        BattlePhase.LEAGUE_MENU,
+                        BattlePhase.HOME,
+                    }
+                ),
+                {"boosts_attempted": tuple(sorted(self._boost_attempted_slots))},
+            )
+        if phase is BattlePhase.BIT_PACK_OPENING and not self._bit_pack_tapped:
+            return _Intent(
+                ActionName.SKIP_BIT_PACK,
+                (0.50, 0.50),
+                frozenset(
+                    {
+                        BattlePhase.NEW_UNIT_UNLOCKED,
+                        BattlePhase.MASTERY_BOOST,
+                        BattlePhase.LEAGUE_MENU,
+                        BattlePhase.HOME,
+                    }
+                ),
+                {"set_flag": "bit_pack_tapped"},
+            )
+        if phase is BattlePhase.NEW_UNIT_UNLOCKED:
+            return _Intent(
+                ActionName.CONTINUE_NEW_UNIT,
+                (0.50, 0.78),
+                frozenset(
+                    {
+                        BattlePhase.MASTERY_BOOST,
+                        BattlePhase.LEAGUE_MENU,
+                        BattlePhase.POST_BATTLE_OFFER,
+                        BattlePhase.HOME,
+                    }
+                ),
                 {},
             )
         if phase is BattlePhase.POST_BATTLE_OFFER and observation.get("offer_close_visible") is True:
@@ -429,6 +618,23 @@ class BattleRunner:
                         )
                     except Exception:
                         pass
+                if self._recovery is not None:
+                    try:
+                        recovery_result = self._recovery.after_observation(observation)
+                        if recovery_result is not None and self._events is not None:
+                            self._events.publish(
+                                RuntimeEvent(
+                                    EventKind.RECOVERY,
+                                    self._clock(),
+                                    dict(recovery_result),
+                                )
+                            )
+                    except Exception as recovery_error:
+                        self._publish_automation(
+                            "recovery_error",
+                            error=repr(recovery_error),
+                            phase=phase.value,
+                        )
                 if self._recorder is not None:
                     self._recorder.record(frame, observation)
 
@@ -458,6 +664,12 @@ class BattleRunner:
                     BattlePhase.MASTERY_DISTRIBUTION,
                     BattlePhase.VICTORY_PACKAGE_READY,
                     BattlePhase.VICTORY_PACKAGE_ANIMATING,
+                    BattlePhase.DOUBLE_BITS,
+                    BattlePhase.MASTERY_BOOST,
+                    BattlePhase.BIT_PACK_OPENING,
+                    BattlePhase.NEW_UNIT_UNLOCKED,
+                    BattlePhase.WATCHING_AD,
+                    BattlePhase.AD_REWARD_GRANTED,
                     BattlePhase.LEAGUE_MENU,
                 }:
                     battle_finished = battle_seen or battle_finished
@@ -476,6 +688,16 @@ class BattleRunner:
                                 self._draft_history[unit] = current * magnitude if current else magnitude
                             else:
                                 self._draft_history[unit] = max(1, current)
+                        flag = pending.intent.metadata.get("set_flag")
+                        if flag == "victory_reward_claimed":
+                            self._victory_reward_claimed = True
+                        elif flag == "double_bits_claimed":
+                            self._double_bits_claimed = True
+                        elif flag == "bit_pack_tapped":
+                            self._bit_pack_tapped = True
+                        boost_slot = pending.intent.metadata.get("boost_slot")
+                        if type(boost_slot) is int:
+                            self._boost_attempted_slots.add(boost_slot)
                         self._audit(
                             {
                                 "event": "resolved",
