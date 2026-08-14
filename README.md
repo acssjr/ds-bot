@@ -92,11 +92,13 @@ O executor:
 
 - toca Batalha uma vez e aguarda matchmaking;
 - escolhe somente slots visualmente preenchidos em drafts normais e bônus de recuperação;
-- lê nome/efeito com RapidOCR e pontua quantidade, multiplicador, upgrade válido, continuidade, diversidade e confiança;
+- lê nome/efeito com RapidOCR e pontua quantidade, multiplicador, upgrade válido, papéis ausentes, continuidade e confiança;
+- reconhece unidades já reveladas no exército inimigo e combina esse sinal com a matriz de sinergias/counters da versão 1.14.1 instalada;
 - registra candidatos, notas e justificativa em `actions.jsonl` e mostra a mesma análise na GUI;
 - reivindica o pacote de vitória e `x2 BITS` quando o anúncio recompensado está disponível;
 - aguarda contador/barra e só fecha o anúncio após `safe_to_close=true`, inclusive em sequências de dois anúncios;
 - aplica no máximo um impulso de maestria por slot visualmente habilitado e para quando a moeda M conhecida chega a zero;
+- trata vitória e derrota separadamente, pulando a distribuição da derrota antes de processar os impulsos;
 - pula Bit Pack, confirma nova unidade e recupera Play Store/navegador para o jogo;
 - não toca durante combate ou resultado de round;
 - separa splash, distribuição de maestria, pacote pronto e animação pós-pacote;
@@ -116,7 +118,7 @@ Anúncios recompensados e impulsos que consomem moeda M estão habilitados na ba
 - a presença de ofertas/atualização por anúncio e do contador de renovação diária já é observável; recursos da conta, troféus, nível, posição/pontos da Liga e unidades visíveis da Coleção possuem OCR especializado, enquanto temporizadores de ofertas/anúncios continuam `OCR_PENDING`;
 - recompensas especiais e algumas telas fora dos fluxos gravados ainda não possuem cobertura calibrada;
 - capturas reais podem permanecer em `UNKNOWN`, o que é esperado nesta fundação;
-- o executor reconhece os efeitos já observados (`+N`, `xN`, `UP` e transformação zumbi) e usa uma utilidade determinística; isso é um viés racional inicial, não uma tier list comprovada — pesos de matchup e taxa de vitória ainda precisam ser aprendidos com resultados reais;
+- o executor reconhece os efeitos já observados (`+N`, `xN`, `UP` e transformação zumbi) e usa uma utilidade determinística com papéis, sinergia própria, counters e pressão visual inimiga; os pesos continuam auditáveis e devem ser calibrados com resultados reais, não tratados como uma tier list infalível;
 - replay demonstra determinismo e segurança estrutural, mas não substitui a validação controlada de captura ao vivo no MEmu.
 
 ## Próximas etapas fechadas

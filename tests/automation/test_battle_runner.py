@@ -173,6 +173,16 @@ def test_post_battle_rewards_boosts_and_ads_are_bounded_and_explicit() -> None:
     runner._boost_attempted_slots = set()
     runner._bit_pack_tapped = False
 
+    defeat = runner._intent(
+        BattlePhase.DEFEAT_DISTRIBUTION,
+        {"match_outcome": "defeat", "tap_to_skip_visible": True},
+    )
+    assert (
+        defeat is not None
+        and defeat.name is ActionName.SKIP_DEFEAT_DISTRIBUTION
+        and defeat.success_phases == frozenset({BattlePhase.MASTERY_BOOST})
+    )
+
     victory = runner._intent(
         BattlePhase.VICTORY_PACKAGE_READY,
         {"reward_ad_available": True, "continue_visible": True},

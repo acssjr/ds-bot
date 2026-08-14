@@ -8,7 +8,11 @@ def test_reader_parses_observed_portuguese_card_effects() -> None:
     transform = DraftCardReader._parse(1, ("Ganso zumbi!",), (0.97,))
 
     assert (add.unit, add.effect, add.magnitude) == ("Cupido", "add", 3)
-    assert (multiply.unit, multiply.effect, multiply.magnitude) == ("Cavaleiro", "multiply", 2)
+    assert (multiply.unit, multiply.effect, multiply.magnitude) == (
+        "Cavaleiro",
+        "multiply",
+        2,
+    )
     assert (transform.unit, transform.effect) == ("Ganso", "transform")
 
 
@@ -39,3 +43,21 @@ def test_policy_reinforces_a_valid_upgrade_for_existing_unit() -> None:
     )
     assert decision.selected_slot == 0
     assert "unidade já escolhida" in decision.reason
+
+
+def test_policy_uses_game_counter_tendency_for_visible_enemy_pick() -> None:
+    cards = (
+        DraftCard(0, "+5 Ganso", "Ganso", "add", 5, 0.99),
+        DraftCard(1, "+2 TNT", "TNT", "add", 2, 0.99),
+    )
+
+    decision = DraftPolicy().choose(
+        cards,
+        history={"Cavaleiro": 3},
+        variant="normal_pick",
+        enemy_units=("Engineer",),
+        enemy_pressure="high",
+    )
+
+    assert decision.selected_slot == 1
+    assert "resposta aos picks inimigos" in decision.reason

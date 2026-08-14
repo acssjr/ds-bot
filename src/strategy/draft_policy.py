@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
+from src.strategy.unit_knowledge import counter_tendency, synergy, unit_for
 from src.vision.draft_reader import DraftCard
 
 
@@ -39,11 +40,7 @@ class DraftDecision:
 
 
 class DraftPolicy:
-    """Deterministic, explainable first-pass utility policy.
-
-    It uses only observed card facts. No invented card tier or hidden game rule is
-    treated as truth; those can be added later from measured battle outcomes.
-    """
+    """Explainable policy grounded in game data, composition, and opposition."""
 
     def choose(
         self,
@@ -51,40 +48,113 @@ class DraftPolicy:
         *,
         history: Mapping[str, int],
         variant: str,
+        enemy_units: Iterable[str] = (),
+        enemy_pressure: str = "unknown",
     ) -> DraftDecision:
         card_list = tuple(cards)
         if not card_list:
             raise ValueError("at least one draft card is required")
         distinct_units = len(history)
+        enemy_list = tuple(dict.fromkeys(str(unit) for unit in enemy_units))
+        owned_roles = {
+            role
+            for name, count in history.items()
+            if count > 0 and (knowledge := unit_for(name)) is not None
+            for role in knowledge.roles
+        }
+
         scored: list[ScoredDraftCard] = []
         for card in card_list:
             score = 10.0
             reasons = ["slot visualmente disponível +10"]
+            knowledge = unit_for(card.unit)
             if card.unit is not None:
-                score += 15.0
-                reasons.append(f"unidade reconhecida ({card.unit}) +15")
+                score += 10.0
+                reasons.append(f"unidade reconhecida ({card.unit}) +10")
+
+            owned = history.get(card.unit, 0) if card.unit is not None else 0
+            body_value = (
+                min(
+                    4.0,
+                    knowledge.base_health / 100.0 + knowledge.base_damage / 50.0,
+                )
+                if knowledge is not None
+                else 1.0
+            )
             effect_bonus = {
-                "add": 9.0 * card.magnitude,
-                "multiply": 20.0 + 8.0 * max(1, card.magnitude - 1),
-                "upgrade": 22.0,
-                "transform": 18.0,
+                "add": 4.0 + body_value * card.magnitude,
+                "multiply": 16.0
+                + body_value * max(1, owned) * max(1, card.magnitude - 1),
+                "upgrade": 20.0 if owned else 3.0,
+                "transform": 14.0 if owned else 2.0,
                 "unknown": 0.0,
             }[card.effect]
             score += effect_bonus
             if effect_bonus:
-                reasons.append(f"efeito {card.effect} +{effect_bonus:.0f}")
+                reasons.append(f"valor do efeito {card.effect} +{effect_bonus:.1f}")
 
-            owned = history.get(card.unit, 0) if card.unit is not None else 0
+            if knowledge is not None:
+                score += knowledge.strategic_prior
+                if knowledge.strategic_prior:
+                    reasons.append(
+                        f"prioridade estratégica {knowledge.strategic_prior:+.0f}"
+                    )
+                missing_role_bonus = 0.0
+                if "frontline" not in owned_roles and "frontline" in knowledge.roles:
+                    missing_role_bonus += 8.0
+                if "ranged" not in owned_roles and "ranged" in knowledge.roles:
+                    missing_role_bonus += 7.0
+                if (
+                    distinct_units >= 2
+                    and "utility" not in owned_roles
+                    and "utility" in knowledge.roles
+                ):
+                    missing_role_bonus += 5.0
+                if missing_role_bonus:
+                    score += missing_role_bonus
+                    reasons.append(f"cobre papel ausente +{missing_role_bonus:.0f}")
+
             if owned:
-                continuity = min(15.0, owned * 5.0)
+                continuity = min(12.0, owned * 2.5)
                 score += continuity
-                reasons.append(f"continuidade com presença estimada {owned} +{continuity:.0f}")
+                reasons.append(f"continuidade com {owned} unidade(s) +{continuity:.1f}")
                 if card.effect == "upgrade":
-                    score += 15.0
-                    reasons.append("upgrade aplicado a unidade já escolhida +15")
-            elif card.unit is not None and distinct_units < 4:
-                score += 8.0
-                reasons.append("diversidade inicial do exército +8")
+                    score += 12.0
+                    reasons.append("upgrade aplicado a unidade já escolhida +12")
+
+            if knowledge is not None:
+                synergy_score = sum(
+                    synergy(knowledge.internal_name, ally) * 4.0
+                    for ally, count in history.items()
+                    if count > 0
+                )
+                if synergy_score:
+                    score += synergy_score
+                    reasons.append(f"sinergia oficial do draft {synergy_score:+.0f}")
+
+                counter_score = sum(
+                    counter_tendency(knowledge.internal_name, enemy) / 6.0
+                    for enemy in enemy_list
+                )
+                if counter_score:
+                    score += counter_score
+                    reasons.append(
+                        f"resposta aos picks inimigos {counter_score:+.1f}"
+                    )
+
+                pressure_bonus = 0.0
+                if enemy_pressure == "high":
+                    if "area" in knowledge.roles:
+                        pressure_bonus += 8.0
+                    if "frontline" in knowledge.roles or "tank" in knowledge.roles:
+                        pressure_bonus += 4.0
+                elif enemy_pressure == "moderate" and "area" in knowledge.roles:
+                    pressure_bonus += 4.0
+                if pressure_bonus:
+                    score += pressure_bonus
+                    reasons.append(
+                        f"adaptação à pressão visual inimiga +{pressure_bonus:.0f}"
+                    )
 
             confidence_bonus = card.confidence * 5.0
             score += confidence_bonus
@@ -94,8 +164,13 @@ class DraftPolicy:
                 reasons.append("prioridade de recuperação por volume +5")
             scored.append(ScoredDraftCard(card, score, tuple(reasons)))
 
-        # Higher score wins. Slot number is only a deterministic final tie-breaker.
         ranked = tuple(sorted(scored, key=lambda item: (-item.score, item.card.slot)))
         winner = ranked[0]
         reason = "; ".join(winner.reasons)
-        return DraftDecision(winner.card.slot, winner.card.text, winner.score, reason, ranked)
+        return DraftDecision(
+            winner.card.slot,
+            winner.card.text,
+            winner.score,
+            reason,
+            ranked,
+        )

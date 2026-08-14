@@ -9,6 +9,7 @@ import numpy as np
 from src.state.game_state import ScreenState
 from src.vision.classifiers.screen_classifier import ScreenClassifier
 from src.vision.draft_reader import DraftCardReader
+from src.vision.opponent_army_reader import OpponentArmyReader
 
 
 class ContextAnalyzer:
@@ -19,6 +20,7 @@ class ContextAnalyzer:
         templates_dir: str | Path,
         *,
         draft_reader: DraftCardReader | None = None,
+        opponent_reader: OpponentArmyReader | None = None,
     ) -> None:
         templates = Path(templates_dir)
         indicators = templates / "indicators"
@@ -29,6 +31,7 @@ class ContextAnalyzer:
         self._ad_endcard_close = self._load(templates / "ads" / "endcard_close_verified.png")
         self._ad_reward_granted = self._load(templates / "ads" / "reward_granted_verified.png")
         self._draft_reader = draft_reader or DraftCardReader()
+        self._opponent_reader = opponent_reader or OpponentArmyReader(templates)
 
     @staticmethod
     def _load(path: Path) -> np.ndarray | None:
@@ -84,14 +87,23 @@ class ContextAnalyzer:
         if screen is ScreenState.DRAFT_SCREEN:
             slots = self._draft_available_slots(frame)
             cards = self._draft_reader.read(frame, slots)
-            return {
+            result = {
                 "context": "draft",
                 "draft_available_slots": slots,
                 "draft_variant": "recovery_bonus" if self._has_recovery_banner(frame) else "normal_pick",
                 "draft_choices": tuple(card.payload() for card in cards),
             }
+            result.update(self._opponent_reader.analyze(frame))
+            return result
         if screen is ScreenState.VICTORY_SUMMARY:
             return self._victory_context(frame, sub_element)
+        if screen is ScreenState.DEFEAT_SUMMARY:
+            return {
+                "context": "defeat",
+                "match_outcome": "defeat",
+                "defeat_phase": "mastery_distribution",
+                "tap_to_skip_visible": True,
+            }
         if screen is ScreenState.DOUBLE_BITS:
             return {
                 "context": "double_bits",
@@ -99,12 +111,15 @@ class ContextAnalyzer:
                 "continue_visible": True,
             }
         if screen is ScreenState.MASTERY_BOOST:
-            return {
+            result = {
                 "context": "mastery_boost",
                 "boost_available_slots": self._boost_available_slots(frame),
                 "continue_visible": True,
                 "spending_currency": "mastery_currency",
             }
+            if sub_element == "ocr:defeat_mastery_boost":
+                result["match_outcome"] = "defeat"
+            return result
         if screen is ScreenState.BIT_PACK_OPENING:
             return {"context": "bit_pack", "tap_to_skip_visible": True}
         if screen is ScreenState.NEW_UNIT_UNLOCKED:

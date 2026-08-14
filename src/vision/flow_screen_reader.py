@@ -39,7 +39,14 @@ class FlowScreenReader:
 
     def classify(self, frame: np.ndarray) -> tuple[ScreenState, float, str | None]:
         try:
-            result = self._ocr(frame)
+            # The shared RapidOCR instance may have just read a fixed resource
+            # crop with detection disabled. Restore the complete pipeline here.
+            result = self._ocr(
+                frame,
+                use_det=True,
+                use_cls=True,
+                use_rec=True,
+            )
         except Exception:
             return ScreenState.UNKNOWN, 0.0, None
         if result is None:
@@ -51,10 +58,14 @@ class FlowScreenReader:
         ]
         joined = " | ".join(tokens)
         impulso_count = sum("IMPULSO" in token for token in tokens)
+        defeat = "DERROTA" in joined
         if "X2 BITS" in joined and "CONTINUAR" in joined:
             return ScreenState.DOUBLE_BITS, 0.94, "ocr:x2_bits"
         if impulso_count >= 2 and "CONTINUAR" in joined:
-            return ScreenState.MASTERY_BOOST, 0.94, "ocr:mastery_boost"
+            element = "ocr:defeat_mastery_boost" if defeat else "ocr:mastery_boost"
+            return ScreenState.MASTERY_BOOST, 0.94, element
+        if defeat and "TOQUE PARA PULAR" in joined:
+            return ScreenState.DEFEAT_SUMMARY, 0.95, "ocr:defeat_distribution"
         if "TOQUE PARA PULAR" in joined and ("PACK" in joined or "BIT" in joined):
             return ScreenState.BIT_PACK_OPENING, 0.95, "ocr:bit_pack"
         if "NOVA UNIDADE" in joined and "CONTINUAR" in joined:

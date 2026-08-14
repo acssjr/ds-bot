@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
+import cv2
 import numpy as np
 
 from src.vision.ocr_engine import shared_rapidocr
@@ -55,6 +56,7 @@ class DraftCardReader:
     def __init__(self, *, engine_factory: Callable[[], Any] | None = None) -> None:
         self._engine_factory = engine_factory or self._default_engine_factory
         self._engine: Any | None = None
+        self._slot_cache: dict[int, tuple[np.ndarray, DraftCard]] = {}
 
     @staticmethod
     def _default_engine_factory() -> Any:
@@ -115,11 +117,36 @@ class DraftCardReader:
         for slot in available_slots:
             if type(slot) is not int or not 0 <= slot <= 2:
                 continue
+            region = self._region(frame, slot)
+            signature = cv2.resize(
+                cv2.cvtColor(region, cv2.COLOR_BGR2GRAY),
+                (32, 32),
+                interpolation=cv2.INTER_AREA,
+            )
+            cached = self._slot_cache.get(slot)
+            if cached is not None:
+                previous_signature, previous_card = cached
+                visual_delta = float(
+                    np.mean(cv2.absdiff(signature, previous_signature))
+                )
+                if visual_delta < 2.5:
+                    cards.append(previous_card)
+                    continue
             try:
-                result = self._ocr(self._region(frame, slot))
+                # RapidOCR keeps per-call mode overrides on the engine instance.
+                # ResourceReader deliberately disables detection for tiny fixed
+                # fields, so every full-image consumer must restore all stages.
+                result = self._ocr(
+                    region,
+                    use_det=True,
+                    use_cls=True,
+                    use_rec=True,
+                )
                 texts = getattr(result, "txts", ()) if result is not None else ()
                 scores = getattr(result, "scores", ()) if result is not None else ()
             except Exception:
                 texts, scores = (), ()
-            cards.append(self._parse(slot, texts or (), scores or ()))
+            card = self._parse(slot, texts or (), scores or ())
+            self._slot_cache[slot] = (signature, card)
+            cards.append(card)
         return tuple(cards)

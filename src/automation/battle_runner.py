@@ -32,6 +32,7 @@ class BattlePhase(str, Enum):
     ROUND_RESULT = "ROUND_RESULT"
     VICTORY_SPLASH = "VICTORY_SPLASH"
     MASTERY_DISTRIBUTION = "MASTERY_DISTRIBUTION"
+    DEFEAT_DISTRIBUTION = "DEFEAT_DISTRIBUTION"
     VICTORY_PACKAGE_READY = "VICTORY_PACKAGE_READY"
     VICTORY_PACKAGE_ANIMATING = "VICTORY_PACKAGE_ANIMATING"
     DOUBLE_BITS = "DOUBLE_BITS"
@@ -50,6 +51,7 @@ class ActionName(str, Enum):
     PICK_DRAFT = "pick_draft"
     SKIP_VICTORY = "skip_victory"
     SKIP_MASTERY = "skip_mastery"
+    SKIP_DEFEAT_DISTRIBUTION = "skip_defeat_distribution"
     CONTINUE_VICTORY = "continue_victory"
     CLAIM_VICTORY_AD = "claim_victory_ad"
     CLAIM_DOUBLE_BITS_AD = "claim_double_bits_ad"
@@ -223,6 +225,8 @@ class BattleRunner:
             return BattlePhase.COMBAT
         if screen is ScreenState.ROUND_RESULT:
             return BattlePhase.ROUND_RESULT
+        if screen is ScreenState.DEFEAT_SUMMARY:
+            return BattlePhase.DEFEAT_DISTRIBUTION
         if screen is ScreenState.POST_BATTLE_OFFER:
             return BattlePhase.POST_BATTLE_OFFER
         if screen is ScreenState.LEAGUE_MENU:
@@ -315,6 +319,14 @@ class BattleRunner:
                 cards,
                 history=self._draft_history,
                 variant=str(observation.get("draft_variant") or "normal_pick"),
+                enemy_units=(
+                    tuple(observation.get("enemy_units", ()))
+                    if isinstance(observation.get("enemy_units", ()), (tuple, list))
+                    else ()
+                ),
+                enemy_pressure=str(
+                    observation.get("enemy_board_pressure") or "unknown"
+                ),
             )
             slot = decision.selected_slot
             selected = next(card for card in cards if card.slot == slot)
@@ -344,6 +356,13 @@ class BattleRunner:
                 (0.50, 0.82),
                 frozenset({BattlePhase.VICTORY_PACKAGE_READY, BattlePhase.VICTORY_PACKAGE_ANIMATING}),
                 {},
+            )
+        if phase is BattlePhase.DEFEAT_DISTRIBUTION:
+            return _Intent(
+                ActionName.SKIP_DEFEAT_DISTRIBUTION,
+                (0.50, 0.82),
+                frozenset({BattlePhase.MASTERY_BOOST}),
+                {"match_outcome": "defeat"},
             )
         if (
             phase is BattlePhase.VICTORY_PACKAGE_READY
@@ -662,6 +681,7 @@ class BattleRunner:
                 if phase in {
                     BattlePhase.VICTORY_SPLASH,
                     BattlePhase.MASTERY_DISTRIBUTION,
+                    BattlePhase.DEFEAT_DISTRIBUTION,
                     BattlePhase.VICTORY_PACKAGE_READY,
                     BattlePhase.VICTORY_PACKAGE_ANIMATING,
                     BattlePhase.DOUBLE_BITS,

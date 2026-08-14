@@ -906,7 +906,14 @@ class DraftShowdownGUI(ctk.CTk):
                         f"S{int(choice.get('slot', 0)) + 1}: {choice.get('text', 'não lido')}"
                     )
             variant = event.payload.get("draft_variant", "normal_pick")
-            text = f"Draft ({variant}): " + (" | ".join(descriptions) or "OCR aguardando estabilidade")
+            enemy_units = event.payload.get("enemy_units", ())
+            enemies = ", ".join(str(unit) for unit in enemy_units) or "ainda não identificadas"
+            pressure = event.payload.get("enemy_board_pressure", "desconhecida")
+            text = (
+                f"Draft ({variant}): "
+                + (" | ".join(descriptions) or "OCR aguardando estabilidade")
+                + f" | Inimigo: {enemies} | Pressão: {pressure}"
+            )
         elif context == "daily_offers":
             free_ads = int(event.payload.get("free_ad_offers_visible", 0))
             refresh_ad = "sim" if event.payload.get("daily_refresh_ad_visible") else "não visível"
