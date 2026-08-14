@@ -20,6 +20,7 @@ from src.geometry.models import PixelPoint
 from src.input.models import InputReceipt, TapCommand
 from src.state.game_state import ScreenState
 from src.strategy.draft_policy import DraftPolicy
+from src.strategy.unit_knowledge import unit_for
 from src.vision.draft_reader import DraftCard
 
 
@@ -340,6 +341,12 @@ class BattleRunner:
                     "selected_unit": selected.unit,
                     "selected_effect": selected.effect,
                     "selected_magnitude": selected.magnitude,
+                    "selected_initial_spawn": (
+                        knowledge.early_spawn
+                        if selected.unit is not None
+                        and (knowledge := unit_for(selected.unit)) is not None
+                        else 1
+                    ),
                     "decision": decision.payload(),
                 },
             )
@@ -698,16 +705,29 @@ class BattleRunner:
                     if self._resolved(pending, phase, frame):
                         selected_unit = pending.intent.metadata.get("selected_unit")
                         if pending.intent.name is ActionName.PICK_DRAFT and selected_unit:
-                            unit = str(selected_unit)
+                            observed_unit = str(selected_unit)
+                            resolved_unit = unit_for(observed_unit)
+                            unit = (
+                                resolved_unit.internal_name
+                                if resolved_unit is not None
+                                else observed_unit
+                            )
                             current = self._draft_history.get(unit, 0)
                             effect = str(pending.intent.metadata.get("selected_effect") or "unknown")
                             magnitude = int(pending.intent.metadata.get("selected_magnitude") or 1)
+                            initial_spawn = int(
+                                pending.intent.metadata.get("selected_initial_spawn") or 1
+                            )
                             if effect == "add":
                                 self._draft_history[unit] = current + magnitude
                             elif effect == "multiply":
-                                self._draft_history[unit] = current * magnitude if current else magnitude
+                                self._draft_history[unit] = (
+                                    current * magnitude
+                                    if current
+                                    else initial_spawn * magnitude
+                                )
                             else:
-                                self._draft_history[unit] = max(1, current)
+                                self._draft_history[unit] = max(initial_spawn, current)
                         flag = pending.intent.metadata.get("set_flag")
                         if flag == "victory_reward_claimed":
                             self._victory_reward_claimed = True

@@ -1,7 +1,19 @@
 from __future__ import annotations
 
+import json
 import unicodedata
 from dataclasses import dataclass
+from importlib.resources import files
+from typing import Any
+
+
+def _load_game_data() -> dict[str, Any]:
+    resource = files("src.strategy.data").joinpath("game_data_1_14_1.json")
+    return json.loads(resource.read_text(encoding="utf-8"))
+
+
+GAME_DATA = _load_game_data()
+GAME_DATA_VERSION = str(GAME_DATA["apk_version"])
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,23 +25,72 @@ class UnitKnowledge:
     base_health: float
     base_damage: float
     early_spawn: int
+    late_spawn: int
+    move_speed: float
+    attack_range: float
+    attack_cycle_seconds: float | None
+    behaviour: tuple[tuple[str, int | float], ...]
+    community_tier: str
     strategic_prior: float
 
 
-# Grounded in Draft Showdown 1.14.1 UnitUpgradeSetup/DraftPool.  Roles and the
-# small strategic priors are explicit policy judgement, informed by the current
-# community role/counter guides; raw game values remain separate and auditable.
-UNITS = (
-    UnitKnowledge("Knight", "Cavaleiro", ("Knight", "Cavaleiro"), frozenset({"frontline", "tank"}), 95, 10, 3, 7),
-    UnitKnowledge("Cupid", "Cupido", ("Cupid", "Cupido"), frozenset({"ranged"}), 35, 12, 3, -2),
-    UnitKnowledge("Goose", "Ganso", ("Goose", "Ganso", "Gansos"), frozenset({"frontline", "swarm"}), 50, 10, 5, 5),
-    UnitKnowledge("TNT", "TNT", ("TNT",), frozenset({"frontline", "area"}), 70, 75, 2, 4),
-    UnitKnowledge("Snail", "Caracol", ("Snail", "Caracol"), frozenset({"ranged", "area"}), 130, 100, 1, 10),
-    UnitKnowledge("Assassin", "Assassino", ("Assassin", "Assassino"), frozenset({"assassin"}), 28, 10, 3, -4),
-    UnitKnowledge("Splime", "Splime", ("Splime", "Slimer"), frozenset({"frontline", "tanky_dps"}), 65, 15, 4, 0),
-    UnitKnowledge("Kingclops", "Reiclops", ("Kingclops", "Reiclops"), frozenset({"tanky_dps"}), 100, 15, 1, -5),
-    UnitKnowledge("Engineer", "Engenheiro", ("Engineer", "Engenheiro"), frozenset({"utility", "ranged"}), 150, 15, 1, 11),
-)
+# These labels are policy metadata, kept apart from the APK facts below.  The
+# tier snapshot is the community list supplied on 2026-08-14; its deliberately
+# small prior can break close ties but cannot override the game's count/counter
+# tables. Names such as Spartheus and Merlinor are tier-III forms of the base
+# units Spartan and Wizard.
+_POLICY = {
+    "Knight": ("Cavaleiro", ("Knight", "Cavaleiro"), {"frontline", "tank"}, "B+", 1),
+    "Cupid": ("Cupido", ("Cupid", "Cupido"), {"ranged"}, "A", 7),
+    "Goose": ("Ganso", ("Goose", "Ganso", "Gansos"), {"frontline", "swarm"}, "A", 7),
+    "TNT": ("TNT", ("TNT",), {"frontline", "area", "suicide"}, "A", 7),
+    "Snail": ("Caracol", ("Snail", "Caracol"), {"ranged", "area"}, "A", 7),
+    "Assassin": ("Assassino", ("Assassin", "Assassino"), {"assassin"}, "C", -3),
+    "Splime": ("Splime", ("Splime", "Slimer"), {"frontline", "tanky_dps"}, "A", 7),
+    "Kingclops": ("Reiclops", ("Kingclops", "Reiclops"), {"tanky_dps"}, "D", -5),
+    "Waster": ("Waster", ("Waster",), {"frontline", "area"}, "A-", 4),
+    "Beetank": ("Beetank", ("Beetank",), {"tank", "summoner"}, "B+", 1),
+    "Mole": ("Mole", ("Mole",), {"frontline", "assassin"}, "B+", 1),
+    "Sniper": ("Sniper", ("Sniper",), {"ranged"}, "A-", 4),
+    "Wizard": ("Merlinor", ("Wizard", "Merlinor"), {"ranged", "area"}, "A", 7),
+    "Turtle": ("Shellbro", ("Turtle", "Shellbro"), {"tank", "assassin"}, "A", 7),
+    "Spartan": ("Spartheus", ("Spartan", "Spartheus"), {"frontline", "tank"}, "A+", 10),
+    "Parasite": ("Parasite", ("Parasite",), {"frontline", "tanky_dps"}, "A-", 4),
+    "Cowboy": ("Sixshoot", ("Cowboy", "Sixshoot"), {"ranged"}, "A-", 4),
+    "ManEater": ("Bloodvine", ("ManEater", "Bloodvine"), {"frontline", "tank"}, "A-", 4),
+    "Agent": ("Agent B", ("Agent", "Agent B"), {"ranged", "assassin"}, "A+", 10),
+    "Villain": ("Overmind", ("Villain", "Overmind"), {"ranged", "area"}, "A", 7),
+    "Goblin": ("Boomling", ("Goblin", "Boomling"), {"ranged", "area"}, "A", 7),
+    "Totem": ("Totem", ("Totem",), {"ranged", "support"}, "A-", 4),
+    "Engineer": ("Engenheiro", ("Engineer", "Engenheiro"), {"utility", "summoner"}, "A", 7),
+    "Spider": ("Matriarch", ("Spider", "Matriarch"), {"frontline", "summoner"}, "A", 7),
+    "Dragon": ("Whelp", ("Dragon", "Whelp"), {"frontline", "flying"}, "A+", 10),
+}
+
+
+def _unit(name: str) -> UnitKnowledge:
+    facts = GAME_DATA["units"][name]
+    display, aliases, roles, tier, prior = _POLICY[name]
+    animation = facts.get("attack_animation")
+    return UnitKnowledge(
+        name,
+        display,
+        tuple(aliases),
+        frozenset(roles),
+        float(facts["health"]),
+        float(facts["damage"]),
+        int(facts["spawn_early"]),
+        int(facts["spawn_late"]),
+        float(facts["move_speed"]),
+        float(facts["attack_range"]),
+        float(animation["cycle_seconds"]) if animation else None,
+        tuple(sorted(facts.get("behaviour", {}).items())),
+        tier,
+        float(prior),
+    )
+
+
+UNITS = tuple(_unit(name) for name in GAME_DATA["unit_order"])
 
 
 def _key(value: str) -> str:
@@ -59,48 +120,14 @@ def unit_for(value: str | None) -> UnitKnowledge | None:
     )
 
 
-# Own-team compatibility from the APK's DraftSynergySetup.  Values are -1, 0,
-# or +1.  Only units currently unlocked/observed on this account are included;
-# extending it is data work, not a policy rewrite.
-_SYNERGY_ROWS = {
-    "Knight": (0, 1, 0, 1, 0, 0, -1, 1, 0),
-    "Cupid": (1, 0, 0, 1, 0, 0, 1, 0, -1),
-    "Goose": (0, 0, 0, -1, 0, 0, -1, 1, 0),
-    "TNT": (1, 1, -1, 0, 1, 0, 1, 1, 0),
-    "Snail": (0, 0, 0, 1, 0, 0, 0, 0, -1),
-    "Assassin": (0, 1, 0, 0, 1, 0, 0, -1, 1),
-    "Splime": (-1, 1, -1, 1, 0, 0, 0, 1, 0),
-    "Kingclops": (1, 0, 1, 1, 0, -1, 1, 0, -1),
-    "Engineer": (0, 1, 0, 0, 1, -1, 0, -1, 0),
-}
-
-
-# Candidate-versus-opponent tendencies from the APK's AiTendencySetup.  This is
-# the game's own draft signal: positive values favour the row unit into the
-# visible opponent unit; negative values discourage it.
-_COUNTER_ROWS = {
-    "Knight": (0, 0, 12, 0, -60, 20, 0, 0, 0),
-    "Cupid": (0, 0, -12, 30, -60, -20, 0, 60, -60),
-    "Goose": (-20, 20, 0, -30, -60, 0, 0, 0, -60),
-    "TNT": (0, -20, 12, 0, 0, 0, 15, 60, 60),
-    "Snail": (0, 20, 12, 0, 0, -20, 15, 60, 0),
-    "Assassin": (-20, 20, 0, 0, 60, 0, 0, 0, -60),
-    "Splime": (0, 0, 0, -30, -60, 0, 0, -60, 0),
-    "Kingclops": (20, -20, 12, 0, -60, 0, 15, 0, 0),
-    "Engineer": (0, -20, 12, 30, 0, 20, 0, 0, 60),
-}
-
-_ORDER = tuple(unit.internal_name for unit in UNITS)
-
-
 def synergy(candidate: str | None, ally: str | None) -> int:
     candidate_unit = unit_for(candidate)
     ally_unit = unit_for(ally)
     if candidate_unit is None or ally_unit is None:
         return 0
-    return _SYNERGY_ROWS[candidate_unit.internal_name][
-        _ORDER.index(ally_unit.internal_name)
-    ]
+    return int(
+        GAME_DATA["synergy"][candidate_unit.internal_name][ally_unit.internal_name]
+    )
 
 
 def counter_tendency(candidate: str | None, opponent: str | None) -> int:
@@ -108,6 +135,28 @@ def counter_tendency(candidate: str | None, opponent: str | None) -> int:
     opponent_unit = unit_for(opponent)
     if candidate_unit is None or opponent_unit is None:
         return 0
-    return _COUNTER_ROWS[candidate_unit.internal_name][
-        _ORDER.index(opponent_unit.internal_name)
-    ]
+    return int(
+        GAME_DATA["counter_tendency"][candidate_unit.internal_name][
+            opponent_unit.internal_name
+        ]
+    )
+
+
+def unit_count_tendency(
+    effect: str,
+    *,
+    spawn_group: int,
+    current_count: int,
+) -> int:
+    """Return the exact AiUnitCountSetup value, clamped to its 0..24 domain."""
+
+    suffix = {
+        "add": "Spawn Early",
+        "multiply": "Multiplier",
+        "upgrade": "Upgrade",
+    }.get(effect)
+    if suffix is None:
+        return 0
+    group = min(5, max(1, int(spawn_group)))
+    count = min(24, max(0, int(current_count)))
+    return int(GAME_DATA["unit_count_scores"][f"x{group} {suffix}"][count])

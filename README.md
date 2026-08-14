@@ -92,7 +92,7 @@ O executor:
 
 - toca Batalha uma vez e aguarda matchmaking;
 - escolhe somente slots visualmente preenchidos em drafts normais e bônus de recuperação;
-- lê nome/efeito com RapidOCR e pontua quantidade, multiplicador, upgrade válido, papéis ausentes, continuidade e confiança;
+- lê nome/efeito com RapidOCR e pontua quantidade, multiplicador, upgrade válido, papéis ausentes, continuidade e confiança; a quantidade usa a tabela `AiUnitCountSetup` extraída do APK e só avança depois da confirmação visual do toque;
 - reconhece unidades já reveladas no exército inimigo e combina esse sinal com a matriz de sinergias/counters da versão 1.14.1 instalada;
 - registra candidatos, notas e justificativa em `actions.jsonl` e mostra a mesma análise na GUI;
 - reivindica o pacote de vitória e `x2 BITS` quando o anúncio recompensado está disponível;
@@ -132,4 +132,4 @@ A automação ativa só poderá ser habilitada depois de gates separados e verif
 5. confirmação por frame novo de cada pós-condição, implementada sem repetição cega;
 6. calibrar custos/benefícios dos impulsos e recompensas com resultados reais, mantendo orçamento explícito.
 
-Consulte a [arquitetura aprovada](docs/superpowers/specs/2026-08-13-draft-showdown-bot-architecture-design.md) e o [plano desta fundação](docs/superpowers/plans/2026-08-13-draft-showdown-safe-foundation.md) para os contratos completos.
+Consulte a [análise estratégica do APK 1.14.1](docs/apk-strategy-analysis-1.14.1.md), a [arquitetura aprovada](docs/superpowers/specs/2026-08-13-draft-showdown-bot-architecture-design.md) e o [plano desta fundação](docs/superpowers/plans/2026-08-13-draft-showdown-safe-foundation.md) para os dados e contratos completos.

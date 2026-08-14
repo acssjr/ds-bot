@@ -3,7 +3,13 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from src.strategy.unit_knowledge import counter_tendency, synergy, unit_for
+from src.strategy.unit_knowledge import (
+    GAME_DATA_VERSION,
+    counter_tendency,
+    synergy,
+    unit_count_tendency,
+    unit_for,
+)
 from src.vision.draft_reader import DraftCard
 
 
@@ -72,7 +78,30 @@ class DraftPolicy:
                 score += 10.0
                 reasons.append(f"unidade reconhecida ({card.unit}) +10")
 
-            owned = history.get(card.unit, 0) if card.unit is not None else 0
+            tracked_owned = (
+                sum(
+                    count
+                    for name, count in history.items()
+                    if knowledge is not None
+                    and (owned_unit := unit_for(name)) is not None
+                    and owned_unit.internal_name == knowledge.internal_name
+                )
+                if knowledge is not None
+                else history.get(card.unit, 0) if card.unit is not None else 0
+            )
+            owned = tracked_owned
+            if (
+                owned == 0
+                and knowledge is not None
+                and card.effect in {"multiply", "upgrade", "transform"}
+            ):
+                # The game does not offer these effects for a truly absent
+                # unit.  When observation starts mid-battle, the card itself
+                # is evidence of at least the unit's normal opening group.
+                owned = knowledge.early_spawn
+                reasons.append(
+                    f"contagem inicial inferida da carta: {owned} {knowledge.display_name}"
+                )
             body_value = (
                 min(
                     4.0,
@@ -83,17 +112,33 @@ class DraftPolicy:
             )
             effect_bonus = {
                 "add": 4.0 + body_value * card.magnitude,
-                "multiply": 16.0
-                + body_value * max(1, owned) * max(1, card.magnitude - 1),
+                "multiply": (
+                    16.0
+                    + body_value * owned * max(1, card.magnitude - 1)
+                    if owned
+                    else -10.0
+                ),
                 "upgrade": 20.0 if owned else 3.0,
                 "transform": 14.0 if owned else 2.0,
                 "unknown": 0.0,
             }[card.effect]
             score += effect_bonus
             if effect_bonus:
-                reasons.append(f"valor do efeito {card.effect} +{effect_bonus:.1f}")
+                reasons.append(f"valor do efeito {card.effect} {effect_bonus:+.1f}")
 
             if knowledge is not None:
+                count_tendency = unit_count_tendency(
+                    card.effect,
+                    spawn_group=knowledge.early_spawn,
+                    current_count=owned,
+                )
+                count_bonus = count_tendency / 10.0
+                if count_bonus:
+                    score += count_bonus
+                    reasons.append(
+                        f"tabela IA por contagem APK {GAME_DATA_VERSION} "
+                        f"({owned} em campo) {count_bonus:+.1f}"
+                    )
                 score += knowledge.strategic_prior
                 if knowledge.strategic_prior:
                     reasons.append(

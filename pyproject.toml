@@ -45,6 +45,7 @@ assets = [
     "templates/**/*.jpg",
     "templates/**/*.jpeg",
 ]
+"src.strategy.data" = ["*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

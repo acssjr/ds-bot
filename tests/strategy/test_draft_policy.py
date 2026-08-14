@@ -23,12 +23,12 @@ def test_policy_prefers_high_value_effect_and_is_deterministic() -> None:
         DraftCard(2, "Cavaleiro x2", "Cavaleiro", "multiply", 2, 0.99),
     )
     policy = DraftPolicy()
-    first = policy.choose(cards, history={}, variant="normal_pick")
-    second = policy.choose(cards, history={}, variant="normal_pick")
+    first = policy.choose(cards, history={"Cavaleiro": 3}, variant="normal_pick")
+    second = policy.choose(cards, history={"Cavaleiro": 3}, variant="normal_pick")
 
     assert first == second
-    assert first.selected_slot == 2
-    assert "multiply" in first.reason
+    assert first.selected_slot == 1
+    assert "tabela IA por contagem APK" in first.reason
 
 
 def test_policy_reinforces_a_valid_upgrade_for_existing_unit() -> None:
@@ -45,7 +45,7 @@ def test_policy_reinforces_a_valid_upgrade_for_existing_unit() -> None:
     assert "unidade já escolhida" in decision.reason
 
 
-def test_policy_uses_game_counter_tendency_for_visible_enemy_pick() -> None:
+def test_policy_uses_tnt_as_the_apk_counter_to_visible_geese() -> None:
     cards = (
         DraftCard(0, "+5 Ganso", "Ganso", "add", 5, 0.99),
         DraftCard(1, "+2 TNT", "TNT", "add", 2, 0.99),
@@ -55,9 +55,51 @@ def test_policy_uses_game_counter_tendency_for_visible_enemy_pick() -> None:
         cards,
         history={"Cavaleiro": 3},
         variant="normal_pick",
-        enemy_units=("Engineer",),
+        enemy_units=("Goose",),
         enemy_pressure="high",
     )
 
     assert decision.selected_slot == 1
     assert "resposta aos picks inimigos" in decision.reason
+
+
+def test_policy_multiplies_a_mass_of_fifteen_geese() -> None:
+    cards = (
+        DraftCard(0, "Ganso x2", "Ganso", "multiply", 2, 0.99),
+        DraftCard(1, "+1 Engenheiro", "Engenheiro", "add", 1, 0.99),
+        DraftCard(2, "+2 TNT", "TNT", "add", 2, 0.99),
+    )
+
+    decision = DraftPolicy().choose(
+        cards,
+        history={"Ganso": 15, "Cavaleiro": 3},
+        variant="normal_pick",
+        enemy_units=("Knight",),
+    )
+
+    assert decision.selected_slot == 0
+    assert "tabela IA por contagem APK 1.14.1 (15 em campo) +50.0" in decision.reason
+
+
+def test_policy_infers_an_opening_group_from_a_multiplier_offer() -> None:
+    cards = (
+        DraftCard(0, "Ganso x2", "Ganso", "multiply", 2, 0.99),
+        DraftCard(1, "+5 Ganso", "Ganso", "add", 5, 0.99),
+    )
+
+    decision = DraftPolicy().choose(cards, history={}, variant="normal_pick")
+
+    assert decision.selected_slot == 0
+    assert "contagem inicial inferida da carta: 5 Ganso" in decision.reason
+
+
+def test_policy_recognizes_history_aliases_when_applying_count_rules() -> None:
+    cards = (DraftCard(0, "Goose x2", "Goose", "multiply", 2, 0.99),)
+
+    decision = DraftPolicy().choose(
+        cards,
+        history={"Ganso": 20},
+        variant="normal_pick",
+    )
+
+    assert "(20 em campo) +100.0" in decision.reason
