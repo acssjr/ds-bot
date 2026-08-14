@@ -61,6 +61,16 @@ def test_gui_source_has_no_legacy_planner_or_live_input_path() -> None:
     )
 
 
+def test_observe_only_entrypoints_do_not_import_opt_in_automation() -> None:
+    gui_source = APP_PATH.read_text(encoding="utf-8")
+    cli_source = Path("src/main.py").read_text(encoding="utf-8")
+
+    for source in (gui_source, cli_source):
+        assert "BattleRunner" not in source
+        assert "LiveAdbInput" not in source
+        assert "src.automation" not in source
+
+
 def test_observer_worker_is_tk_independent_and_uses_safe_runtime() -> None:
     worker = _function(_tree(), "run_observer_worker")
     names = {node.id for node in ast.walk(worker) if isinstance(node, ast.Name)}

@@ -24,6 +24,7 @@ class ScreenState(str, Enum):
     LEAGUE_MENU = "LEAGUE_MENU"
     RANKED_LOCKED = "RANKED_LOCKED"
     PROFILE_MENU = "PROFILE_MENU"
+    POST_BATTLE_OFFER = "POST_BATTLE_OFFER"
 
 class CardRole(str, Enum):
     TANK = "Tank"

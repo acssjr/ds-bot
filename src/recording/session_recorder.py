@@ -143,6 +143,20 @@ class SessionRecorder:
             stream.write(json.dumps(metadata, ensure_ascii=False) + "\n")
         return RecordingResult(True, self._saved_count, reason, metadata["file"], str(self._session_dir))
 
+    def record_action(self, payload: Mapping[str, Any]) -> None:
+        if not isinstance(payload, Mapping):
+            raise TypeError("action payload must be a mapping")
+        if not all(isinstance(key, str) for key in payload):
+            raise TypeError("action payload keys must be strings")
+        self._ensure_session()
+        assert self._session_dir is not None
+        entry = {
+            "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
+            **dict(payload),
+        }
+        with (self._session_dir / "actions.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
     def close(self) -> None:
         if self._session_dir is None:
             return

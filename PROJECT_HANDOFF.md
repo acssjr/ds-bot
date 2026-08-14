@@ -234,6 +234,18 @@ Construir uma FSM de batalha isolada, inicialmente com escolha aleatória entre 
 
 Estados passivos (`WAIT_MATCHMAKING`, `COMBAT`, `ROUND_RESULT` e animações) não enviam taps. Cada estado ativo exige evidência estável, orçamento de ação e pós-condição específica. Gastos, impulsos e anúncios devem permanecer desabilitados na primeira versão.
 
+### Implementado em 14/08/2026
+
+O primeiro executor isolado está disponível em `src/automation/` e não é importado pela GUI nem por `src.main`. Ele implementa a FSM acima com escolhas aleatórias apenas entre slots visualmente preenchidos, backend ADB auditável, orçamento de ações, pós-condição sem repetição cega, fechamento seguro de `POST_BATTLE_OFFER` e gravação de `actions.jsonl` junto ao dataset.
+
+Execução explícita:
+
+```powershell
+.\.venv312\Scripts\python.exe -m src.automation.main --device 127.0.0.1:21503 --confirm-live-input
+```
+
+Antes do próximo teste ao vivo, executar a suíte e iniciar com o jogo na HOME. O próximo incremento funcional é interpretar nome, quantidade, efeito, nível e maestria das cartas para substituir a escolha aleatória por estratégia; anúncios, impulsos e qualquer gasto continuam fora do executor.
+
 ---
 
 *Fim do documento de handoff atualizado.*

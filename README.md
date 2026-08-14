@@ -2,19 +2,19 @@
 
 Fundação para automação visual confiável de **uma conta do Draft Showdown em uma única instância do MEmu**, escolhida explicitamente pelo número de série ADB.
 
-## Estado atual: observação com recuperação externa limitada
+## Estado atual: observação segura e executor experimental isolado
 
-Esta versão continua sem automação de gameplay. A CLI e a GUI usam o mesmo `BotRuntime` para capturar frames e publicar observações; na GUI, existe apenas uma recuperação limitada para anúncios que abrem outro aplicativo. O runtime atual:
+A CLI padrão e a GUI continuam observe-only e usam o mesmo `BotRuntime` para capturar frames e publicar observações; na GUI, existe apenas uma recuperação limitada para anúncios que abrem outro aplicativo. Um segundo entrypoint, separado e explicitamente confirmado, executa exatamente uma batalha com escolhas aleatórias entre slots válidos e pós-condições visuais. O runtime padrão:
 
 - captura automaticamente a tela nativa do Android via ADB, ou reproduz imagens gravadas;
 - alterna entre `adb exec-out`, captura shell e `adbutils` quando o MEmu devolve frames pretos transitórios; após falhas consecutivas, renova o handle ADB sem encerrar a observação;
 - na GUI, grava automaticamente um dataset seletivo em `datasets/sessions/`, priorizando transições, `UNKNOWN`, mudanças visuais e amostras periódicas;
 - processa apenas a instância MEmu selecionada explicitamente;
-- **não envia taps ou swipes de gameplay**;
+- **não envia taps ou swipes de gameplay**; somente `src.automation.main` pode fazê-lo após `--confirm-live-input`;
 - na GUI, depois que um anúncio recompensado foi reconhecido, verifica o pacote Android em primeiro plano: se Play Store, navegador ou outro app externo foi aberto, tenta `Voltar`, depois reabrir e, como último fallback, reiniciar apenas o Draft Showdown;
 - encerra de forma cooperativa e registra eventos de ciclo de vida, frame, observação e erro.
 
-Os módulos legados de planejamento e entrada ainda existem no código como referência para etapas futuras, mas não são importados nem acionados pelos pontos de entrada atuais. A recuperação externa não usa coordenadas nem reaproveita o planejador legado.
+Os módulos legados de planejamento e entrada ainda existem no código como referência. Eles não são importados nem acionados pelos entrypoints observe-only. O executor experimental usa uma FSM nova e isolada, sem reaproveitar o controlador legado.
 
 ## Requisitos
 
@@ -78,6 +78,29 @@ Não há seleção implícita do primeiro emulador. Em modo ao vivo, `--frames` 
 
 A GUI descobre os dispositivos fora da thread do Tk e executa a mesma fundação `BotRuntime` em uma thread de trabalho. Quando há somente um dispositivo, ele é selecionado automaticamente e exibido com nome amigável (por exemplo, `MEmu · 127.0.0.1:21503`); com vários dispositivos, a seleção explícita continua obrigatória. Eventos são consumidos pela thread da interface. A descoberta e a sessão ADB da GUI usam timeout de inatividade de 5 segundos. O painel mostra duração e estabilidade da sessão, observações, transições, taxa de `UNKNOWN`, frames válidos, pretos descartados, recuperações, estratégia de captura, recuperação de aplicativo externo, imagens salvas e o último retrato confiável dos recursos da conta. Energia, gemas, moedas, moeda de maestria, troféus e nível são lidos em regiões específicas; Coleção e Liga recebem uma leitura detalhada ao entrar na respectiva tela. O retrato validado sobrevive a reinícios em `datasets/account_state.json`. Os arquivos JPEG e o `observations.jsonl` ficam numa pasta de sessão em `datasets/sessions/`; frames repetidos são deduplicados para limitar uso de disco. Pausa e automação de gameplay permanecem desabilitadas.
 
+## Executor experimental de uma batalha
+
+Este comando envia taps reais. Deixe o jogo na HOME ou em uma oferta pós-batalha reconhecida e informe o serial exato:
+
+```powershell
+.\.venv312\Scripts\python.exe -m src.automation.main --device 127.0.0.1:21503 --confirm-live-input
+```
+
+Opcionalmente, `--seed 7` torna as escolhas aleatórias reproduzíveis e `--max-minutes 20` limita o tempo total. Sem `--max-minutes`, o matchmaking não recebe timeout artificial; `Ctrl+C` continua disponível.
+
+O executor:
+
+- toca Batalha uma vez e aguarda matchmaking;
+- escolhe somente slots visualmente preenchidos em drafts normais e bônus de recuperação;
+- não toca durante combate ou resultado de round;
+- separa splash, distribuição de maestria, pacote pronto e animação pós-pacote;
+- fecha a oferta paga pós-batalha exclusivamente pelo X detectado;
+- retorna da Liga para HOME e encerra;
+- para sem repetir o tap se uma pós-condição não aparecer;
+- grava frames em `datasets/sessions/<sessão>/observations.jsonl` e ações em `actions.jsonl`.
+
+Anúncios, impulsos, compras, upgrades e qualquer gasto permanecem desabilitados. A GUI não importa esse executor e continua incapaz de enviar taps de gameplay.
+
 ## Limitações conhecidas
 
 - uma partida ADB real completa é reconhecida nas etapas `HOME`, `COLLECTION_MENU`, `WAIT_MATCHMAKING`, `DRAFT_SCREEN`, `COMBAT`, `ROUND_RESULT` e `VICTORY_SUMMARY`;
@@ -87,7 +110,7 @@ A GUI descobre os dispositivos fora da thread do Tk e executa a mesma fundação
 - a presença de ofertas/atualização por anúncio e do contador de renovação diária já é observável; recursos da conta, troféus, nível, posição/pontos da Liga e unidades visíveis da Coleção possuem OCR especializado, enquanto temporizadores de ofertas/anúncios continuam `OCR_PENDING`;
 - recompensas especiais e algumas telas fora dos fluxos gravados ainda não possuem cobertura calibrada;
 - capturas reais podem permanecer em `UNKNOWN`, o que é esperado nesta fundação;
-- ainda não há detector de cartas validado, decisão de draft, execução de ações de gameplay ou verificação de pós-condição dessas ações; a única recuperação automática atual é o retorno seguro de aplicativos externos abertos durante anúncios;
+- o executor experimental detecta slots válidos e escolhe aleatoriamente, mas ainda não interpreta estrategicamente nome/efeito de todas as cartas; toda ação ativa possui pós-condição e orçamento, enquanto anúncios, impulsos e gastos continuam bloqueados;
 - replay demonstra determinismo e segurança estrutural, mas não substitui a validação controlada de captura ao vivo no MEmu.
 
 ## Próximas etapas fechadas
@@ -97,8 +120,8 @@ A automação ativa só poderá ser habilitada depois de gates separados e verif
 1. manifesto de percepção com ROIs, escalas, thresholds e corpus de replay;
 2. percepção calibrada e observações imutáveis com proveniência de frame;
 3. FSM e política de intenção que rejeitem `UNKNOWN` e baixa confiança;
-4. action gate e backend de entrada isolado, inicialmente em dry-run;
-5. confirmação por frame novo de cada pós-condição;
+4. action gate e backend de entrada isolado, validados em dry-run e disponíveis no entrypoint experimental;
+5. confirmação por frame novo de cada pós-condição, implementada sem repetição cega;
 6. ampliar o supervisor já limitado a anúncios com pós-condições específicas para futuras ações de gameplay.
 
 Consulte a [arquitetura aprovada](docs/superpowers/specs/2026-08-13-draft-showdown-bot-architecture-design.md) e o [plano desta fundação](docs/superpowers/plans/2026-08-13-draft-showdown-safe-foundation.md) para os contratos completos.

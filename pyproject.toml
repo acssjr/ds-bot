@@ -28,6 +28,7 @@ dev = [
 
 [project.scripts]
 draft-showdown-bot = "src.main:main"
+draft-showdown-battle = "src.automation.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
